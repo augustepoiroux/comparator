@@ -1,14 +1,14 @@
-{"version": "1.2.0",
+{"version": "1.1.0",
  "packagesDir": ".lake/packages",
  "packages":
  [{"url": "https://github.com/augustepoiroux/lean4export.git",
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "29daaf88782899197fcc3ee5222bab3247538101",
+   "rev": "274f2bc32143bd6ae7b06cfe96b0c21a1f74d4ed",
    "name": "lean4export",
    "manifestFile": "lake-manifest.json",
-   "inputRev": "29daaf88782899197fcc3ee5222bab3247538101",
+   "inputRev": "274f2bc32143bd6ae7b06cfe96b0c21a1f74d4ed",
    "inherited": false,
    "configFile": "lakefile.toml"},
   {"url": "https://github.com/leanprover/lean4checker",
@@ -22,5 +22,4 @@
    "inherited": false,
    "configFile": "lakefile.toml"}],
  "name": "Comparator",
- "lakeDir": ".lake",
- "fixedToolchain": false}
+ "lakeDir": ".lake"}
