@@ -117,7 +117,7 @@ def runSandBoxed (spawnArgs : LandrunArgs) : M Unit := do
   if ret != 0 then
     throw <| .userError s!"Child exited with {ret}"
 
-def safeLakeBuild (target : Lean.Name) : M Unit := do
+def safeLakeBuild (target : Lean.Name) : M (Except String Unit) := do
   IO.println s!"Building {target}"
   let leanPrefix ← getLeanPrefix
   let projectDir ← getProjectDir
@@ -127,7 +127,7 @@ def safeLakeBuild (target : Lean.Name) : M Unit := do
   if !(← System.FilePath.pathExists dotLakeDir) then
     IO.FS.createDir dotLakeDir
 
-  runSandBoxed {
+  let args := buildLandrunArgs {
     cmd := "lake",
     args := #["build", target.toString (escape := false)],
     envPass := #["PATH", "HOME", "LEAN_ABORT_ON_PANIC"]
@@ -136,6 +136,17 @@ def safeLakeBuild (target : Lean.Name) : M Unit := do
     writablePaths := #[dotLakeDir]
     executablePaths := #[leanPrefix, gitLocation]
   }
+  
+  let proc ← IO.Process.spawn {
+    cmd := (← read).whichLandrun,
+    args,
+    env := #[("LEAN_ABORT_ON_PANIC", some "1")]
+    cwd := projectDir
+  }
+  let ret ← proc.wait
+  if ret != 0 then
+    return .error s!"Building {target} failed."
+  return .ok ()
 
 def safeExport (module : Lean.Name) (decls : Array Lean.Name) : M String := do
   IO.println s!"Exporting {decls} from {module}"
@@ -270,11 +281,11 @@ def compareIt : M Unit := do
     solutionExportTargets := solutionExportTargets ++ (← getTheoremNames).map (· ++ `disproof)
 
   let challengeModule ← getChallengeModule
-  safeLakeBuild challengeModule
+  IO.ofExcept <| ← safeLakeBuild challengeModule
   let challengeExport ← safeExport challengeModule challengeExportTargets
 
   let solutionModule ← getSolutionModule
-  safeLakeBuild solutionModule
+  IO.ofExcept <| ← safeLakeBuild solutionModule
   let solutionExport ← safeExport solutionModule solutionExportTargets
 
   verifyMatch challengeExport solutionExport
