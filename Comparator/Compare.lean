@@ -1,3 +1,4 @@
+import Comparator.Disproof
 /-
 Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
@@ -63,26 +64,36 @@ def definitionHoleMatches (challengeHole solutionHole : Lean.DefinitionVal) : Bo
     && challengeHole.safety == solutionHole.safety
 
 def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array Lean.Name)
-    (definitionTargets : Array Lean.Name) (primitive : Array Lean.Name) : Except String Unit := do
+    (definitionTargets : Array Lean.Name) (primitive : Array Lean.Name) (allowDisproofs : Bool := false) : Except String Unit := do
   let mut worklist := primitive
 
   for target in theoremTargets do
     let some challengeConst := challenge.constMap[target]?
       | throw s!"Const not found in challenge: '{target}'"
 
-    let some solutionConst := solution.constMap[target]?
-      | throw s!"Const not found in solution: '{target}'"
+    let isDisproof := allowDisproofs && solution.constMap.contains (target ++ `disproof)
+    let actualTarget := if isDisproof then target ++ `disproof else target
+
+    let some solutionConstInfo := solution.constMap[actualTarget]?
+      | throw s!"Const not found in solution: '{actualTarget}'"
 
     let (challengeConst, solutionConst) ←
-      match challengeConst, solutionConst with
+      match challengeConst, solutionConstInfo with
       | .thmInfo cc, .thmInfo sc
       | .axiomInfo cc, .axiomInfo sc => pure (cc.toConstantVal, sc.toConstantVal)
-      | _, _ => throw s!"Challenge and solution constant kind don't match: '{target}'"
+      | _, _ => throw s!"Challenge and solution constant kind don't match: '{actualTarget}'"
 
-    if challengeConst != solutionConst then
-      throw s!"Challenge and solution theorem statement do not match: '{target}'"
+    if isDisproof then
+      unless challengeConst.levelParams == solutionConst.levelParams do
+        throw s!"Challenge and solution theorem universe levels do not match: '{actualTarget}'"
+      let negatedType := Disproof.negateExpr challengeConst.type
+      unless Disproof.isEquiv negatedType solutionConst.type do
+        throw s!"Solution disproof statement does not match negated challenge theorem statement: '{actualTarget}'"
+    else
+      if challengeConst != solutionConst then
+        throw s!"Challenge and solution theorem statement do not match: '{actualTarget}'"
 
-    worklist := worklist ++ challengeConst.type.getUsedConstants
+    worklist := worklist ++ solutionConst.type.getUsedConstants
 
   for target in definitionTargets do
     let some challengeConst := challenge.constMap[target]?
