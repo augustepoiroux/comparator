@@ -18,3 +18,8 @@ rev = "b7398199245524275543dec6113229c9bb4902e5"
 name = "lean4export"
 git = "https://github.com/augustepoiroux/lean4export.git"
 rev = "274f2bc32143bd6ae7b06cfe96b0c21a1f74d4ed"
+
+[[require]]
+name = "formal_conjectures"
+git = "https://github.com/google-deepmind/formal-conjectures.git"
+rev = "52784c1d6a7bf67bc9404eea2f89f18b3dbcbebf"

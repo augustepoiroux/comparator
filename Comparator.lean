@@ -5,4 +5,4 @@ Authors: Henrik Böving
 -/
 import Comparator.Axioms
 import Comparator.Compare
-import Comparator.Answer
+
