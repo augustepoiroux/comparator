@@ -39,14 +39,19 @@ name = \"Solution\"
 
 [[lean_lib]]
 name = \"Challenge\"
+
+[[require]]
+name = \"Comparator\"
+path = \"/usr/local/google/home/augustepoiroux/Documents/comparator\"
 "
   IO.FS.writeFile (dir / "lakefile.toml") lakefileContent
 
-def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) : IO Nat := do
+def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) (envOverride : Array (String × Option String) := #[]) : IO Nat := do
   let output ← IO.Process.spawn {
     cmd := cmd
     args := args
     cwd := some dir
+    env := envOverride
   }
   let exitCode ← output.wait
   pure exitCode.toNat
@@ -78,7 +83,10 @@ def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : F
 
     createAdditionalFiles tempDir
 
-    let exitCode ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"]
+    let cwd ← IO.Process.getCurrentDir
+    let leanPath := cwd / ".lake" / "build" / "lib" / "lean"
+    let envOverride := #[("LEAN_PATH", some leanPath.toString)]
+    let exitCode ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"] envOverride
 
     IO.FS.removeDirAll tempDir
 
