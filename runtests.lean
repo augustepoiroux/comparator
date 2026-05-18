@@ -28,9 +28,10 @@ partial def copyDirContents (src : FilePath) (dst : FilePath) : IO Unit := do
     else
       copyFile srcPath dstPath
 
-def createAdditionalFiles (dir : FilePath) : IO Unit := do
+def createAdditionalFiles (dir : FilePath) (repoRoot : FilePath) : IO Unit := do
+  let cwd := repoRoot.toString
   let lakefileContent :=
-"
+s!"
 name = \"comparatortest\"
 version = \"0.1.0\"
 
@@ -39,14 +40,19 @@ name = \"Solution\"
 
 [[lean_lib]]
 name = \"Challenge\"
+
+[[require]]
+name = \"Comparator\"
+path = \"{cwd}\"
 "
   IO.FS.writeFile (dir / "lakefile.toml") lakefileContent
 
-def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) : IO Nat := do
+def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) (envOverride : Array (String × Option String) := #[]) : IO Nat := do
   let output ← IO.Process.spawn {
     cmd := cmd
     args := args
     cwd := some dir
+    env := envOverride
   }
   let exitCode ← output.wait
   pure exitCode.toNat
@@ -64,7 +70,7 @@ def getTempDir : IO FilePath := do
   return "/tmp" / s!"lean_test_{← IO.rand 0 999999}"
 
 def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : FilePath)
-    (comparatorPath : FilePath) : IO TestResult := do
+    (comparatorPath : FilePath) (repoRoot : FilePath) : IO TestResult := do
   try
     let configPath := projectPath / "test.json"
     let config ← readTestConfig configPath
@@ -74,11 +80,13 @@ def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : F
 
     copyDirContents projectPath tempDir
 
-    copyFile "lean-toolchain" (tempDir / "lean-toolchain")
+    copyFile (repoRoot / "lean-toolchain") (tempDir / "lean-toolchain")
 
-    createAdditionalFiles tempDir
+    createAdditionalFiles tempDir repoRoot
 
-    let exitCode ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"]
+    let leanPath := repoRoot / ".lake" / "build" / "lib" / "lean"
+    let envOverride := #[("LEAN_PATH", some leanPath.toString)]
+    let exitCode ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"] envOverride
 
     IO.FS.removeDirAll tempDir
 
@@ -119,6 +127,7 @@ def printTestResult (result : TestResult) : IO Unit := do
 
 def main : IO UInt32 := do
   let testsDir : FilePath := "tests"
+  let repoRoot := (← IO.FS.realPath testsDir).parent.get!
 
   IO.println "# Running tests\n"
 
@@ -135,7 +144,7 @@ def main : IO UInt32 := do
   for projectPath in projects do
     let projectName := projectPath.fileName.get!
     IO.println s!"\n## Running test: {projectName}\n"
-    let result ← runTestProject projectPath projectName testsDir comparatorPath
+    let result ← runTestProject projectPath projectName testsDir comparatorPath repoRoot
     results := results.push result
     match result with
     | .success _ => pure ()

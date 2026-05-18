@@ -21,6 +21,7 @@ structure Context where
   gitLocation : System.FilePath
   enableNanoda : Bool
   allowDisproofs : Bool
+  allowAnswers : Bool
   whichLandrun : String
   whichLean4Export : String
   whichNanoda : String
@@ -65,6 +66,9 @@ def getNanodaEnabled : M Bool := do return (← read).enableNanoda
 
 @[inline]
 def getAllowDisproofs : M Bool := do return (← read).allowDisproofs
+
+@[inline]
+def getAllowAnswers : M Bool := do return (← read).allowAnswers
 
 def queryGitLocation : IO System.FilePath := do
   let out ← IO.Process.run {
@@ -130,7 +134,7 @@ def safeLakeBuild (target : Lean.Name) : M (Except String Unit) := do
   let args := buildLandrunArgs {
     cmd := "lake",
     args := #["build", target.toString (escape := false)],
-    envPass := #["PATH", "HOME", "LEAN_ABORT_ON_PANIC"]
+    envPass := #["PATH", "HOME", "LEAN_ABORT_ON_PANIC", "LEAN_PATH"]
     envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
     readablePaths := #[projectDir]
     writablePaths := #[dotLakeDir]
@@ -261,7 +265,10 @@ def verifyMatch (challengeExport : String) (solutionExport : String) :
   let challenge ← Export.parseStream (← stringStream challengeExport)
   let solution ← Export.parseStream (← stringStream solutionExport)
   let theoremNames ← getTheoremNames
-  let definitionNames ← getDefinitionNames
+  let mut definitionNames ← getDefinitionNames
+  if ← getAllowAnswers then
+    definitionNames := definitionNames ++ theoremNames.map (· ++ `_answer)
+
   let targets := (← getTheoremNames) ++ (← getLegalAxioms)
   let allowDisproofs ← getAllowDisproofs
   let primTargets ← primitiveTargets
@@ -273,8 +280,13 @@ def verifyMatch (challengeExport : String) (solutionExport : String) :
   runKernel solution
 
 def compareIt : M Unit := do
-  let challengeExportTargets := (← builtinTargets) ++ (← getTheoremNames) ++ (← getLegalAxioms)
+  let mut challengeExportTargets := (← builtinTargets) ++ (← getTheoremNames) ++ (← getLegalAxioms)
     ++ (← primitiveTargets) ++ (← getDefinitionNames)
+  
+  if ← getAllowAnswers then
+    let answerTargets := (← getTheoremNames).map (· ++ `_answer)
+    challengeExportTargets := challengeExportTargets ++ answerTargets
+
   let mut solutionExportTargets := challengeExportTargets
 
   if ← getAllowDisproofs then
@@ -300,6 +312,7 @@ structure Config where
   permitted_axioms : Array String
   enable_nanoda : Bool
   allow_disproofs : Option Bool := none
+  allow_answers : Option Bool := none
   deriving Lean.FromJson, Lean.ToJson, Repr
 
 def M.run (x : M α) (cfg : Config) : IO α := do
@@ -320,6 +333,7 @@ def M.run (x : M α) (cfg : Config) : IO α := do
     gitLocation := gitLocation,
     enableNanoda := cfg.enable_nanoda,
     allowDisproofs := cfg.allow_disproofs.getD false,
+    allowAnswers := cfg.allow_answers.getD false,
     whichLean4Export,
     whichLandrun,
     whichNanoda
