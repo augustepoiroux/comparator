@@ -65,12 +65,14 @@ def getTempDir : IO FilePath := do
 
 def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : FilePath)
     (comparatorPath : FilePath) : IO TestResult := do
+  let mut tempDirCreated := none
   try
     let configPath := projectPath / "test.json"
     let config ← readTestConfig configPath
 
     let tempDir ← getTempDir
     IO.FS.createDirAll tempDir
+    tempDirCreated := some tempDir
 
     copyDirContents projectPath tempDir
 
@@ -80,6 +82,21 @@ def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : F
 
     let exitCode ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"]
 
+    -- If a json_output_path was configured, verify the output file exists and is valid JSON.
+    let projectConfigPath := projectPath / "config.json"
+    if (← projectConfigPath.pathExists) then
+      let projectConfigContent ← IO.FS.readFile projectConfigPath
+      if let .ok json := Lean.Json.parse projectConfigContent then
+        if let .ok jsonOutputPath := json.getObjValAs? String "json_output_path" then
+          let actualOutputPath := tempDir / jsonOutputPath
+          if !(← actualOutputPath.pathExists) then
+            IO.FS.removeDirAll tempDir
+            return TestResult.error projectName s!"json_output_path file '{jsonOutputPath}' was not created"
+          let outputContent ← IO.FS.readFile actualOutputPath
+          if let .error e := Lean.Json.parse outputContent then
+            IO.FS.removeDirAll tempDir
+            return TestResult.error projectName s!"json_output_path file '{jsonOutputPath}' contains invalid JSON: {e}"
+
     IO.FS.removeDirAll tempDir
 
     if exitCode == config.exit_code then
@@ -88,12 +105,11 @@ def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : F
       return TestResult.failure projectName config.exit_code exitCode
 
   catch e =>
-    try
-      let tempDir ← getTempDir
-      if (← tempDir.pathExists) then
-        IO.FS.removeDirAll tempDir
-    catch _ =>
-      pure ()
+    if let some tempDir := tempDirCreated then
+      try
+        if (← tempDir.pathExists) then
+          IO.FS.removeDirAll tempDir
+      catch _ => pure ()
     return TestResult.error projectName e.toString
 
 def findProjects (testsDir : FilePath) : IO (Array FilePath) := do
