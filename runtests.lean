@@ -4,6 +4,7 @@ open Lean System.FilePath IO.FS IO.Process System
 
 structure TestConfig where
   exit_code : Nat
+  expected_output : Option (Array String) := none
   deriving FromJson, ToJson
 
 inductive TestResult
@@ -42,14 +43,13 @@ name = \"Challenge\"
 "
   IO.FS.writeFile (dir / "lakefile.toml") lakefileContent
 
-def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) : IO Nat := do
-  let output ← IO.Process.spawn {
+def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) : IO (Nat × String) := do
+  let out ← IO.Process.output {
     cmd := cmd
     args := args
     cwd := some dir
   }
-  let exitCode ← output.wait
-  pure exitCode.toNat
+  pure (out.exitCode.toNat, out.stdout ++ "\n" ++ out.stderr)
 
 def readTestConfig (configPath : FilePath) : IO TestConfig := do
   let content ← IO.FS.readFile configPath
@@ -63,7 +63,7 @@ def readTestConfig (configPath : FilePath) : IO TestConfig := do
 def getTempDir : IO FilePath := do
   return "/tmp" / s!"lean_test_{← IO.rand 0 999999}"
 
-def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : FilePath)
+def runTestProject (projectPath : FilePath) (projectName : String) (_testsDir : FilePath)
     (comparatorPath : FilePath) : IO TestResult := do
   let mut tempDirCreated := none
   try
@@ -80,7 +80,14 @@ def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : F
 
     createAdditionalFiles tempDir
 
-    let exitCode ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"]
+    let (exitCode, outputTrace) ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"]
+
+    -- If expected_output substrings are specified, verify they exist in the trace
+    if let some expectedSubstrings := config.expected_output then
+      for substr in expectedSubstrings do
+        if !outputTrace.contains substr then
+          IO.FS.removeDirAll tempDir
+          return TestResult.error projectName s!"Expected output trace substring '{substr}' was not found.\nCaptured output:\n{outputTrace}"
 
     -- If a json_output_path was configured, verify the output file exists and is valid JSON.
     let projectConfigPath := projectPath / "config.json"
