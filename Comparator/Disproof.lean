@@ -92,6 +92,8 @@ partial def inferType (ctx : List Expr) (constMap : Std.HashMap Name ConstantInf
     .const ``String []
   | .mdata _ e =>
     inferType ctx constMap e
+  | .proj _ _ e =>
+    inferType ctx constMap e
   | _ =>
     .sort Level.zero
 

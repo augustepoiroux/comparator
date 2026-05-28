@@ -1,5 +1,13 @@
 /-
-  CHALLENGE: False Two-Universe Polymorphic Target
-  Tests valid universe level parameter collapsing in disproofs.
+  CHALLENGE: False Two-Universe Isomorphism Target Spec
+  Tests valid disproofs under a target that strictly depends on and uses 
+  both independent universe level parameters u and v:
+  ∀ {α : Type u} {β : Type v} (x : α) (y : β), Nonempty (Equiv α β)
 -/
-theorem polymorphic_challenge {α : Type u} {β : Type v} (x : α) (y : β) : 1 + 1 = 3 := sorry
+structure Equiv (α : Sort u) (β : Sort v) where
+  toFun : α → β
+  invFun : β → α
+  left_inv : ∀ x, invFun (toFun x) = x
+  right_inv : ∀ y, toFun (invFun y) = y
+
+theorem polymorphic_challenge {α : Type u} {β : Type v} (x : α) (y : β) : Nonempty (Equiv α β) := sorry
