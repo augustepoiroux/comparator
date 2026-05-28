@@ -7,6 +7,8 @@ Authors: Henrik Böving
 import Comparator.Axioms
 import Export.Parse
 
+open Lean
+
 namespace Comparator
 
 namespace Compare
@@ -84,11 +86,10 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
       | _, _ => throw s!"Challenge and solution constant kind don't match: '{actualTarget}'"
 
     if isDisproof then
-      unless challengeConst.levelParams == solutionConst.levelParams do
-        throw s!"Challenge and solution theorem universe levels do not match: '{actualTarget}'"
-      let negatedType := Disproof.negateExpr challengeConst.type
-      unless Disproof.isEquiv negatedType solutionConst.type do
-        throw s!"Solution disproof statement does not match negated challenge theorem statement: '{actualTarget}'"
+      let negatedType := Disproof.negateExpr challengeConst.type challenge.constMap
+      let solutionType := Disproof.preprocessExpr solutionConst.type
+      unless (Disproof.isEquivInst {} negatedType solutionType).isSome do
+        throw s!"Solution disproof statement does not match negated challenge theorem statement: '{actualTarget}'\nExpected (structurally):\n{negatedType}\nGot (structurally):\n{solutionType}"
     else
       if challengeConst != solutionConst then
         throw s!"Challenge and solution theorem statement do not match: '{actualTarget}'"

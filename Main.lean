@@ -381,7 +381,8 @@ def verifySingleTheoremOutcome (challenge solution : Export.ExportedEnv) (t : Le
     (if filteredDefinitionNames.contains t then filteredDefinitionNames else filteredDefinitionNames.push t)
 
   match Comparator.compareAt challenge solution targets defsToCompare primTargets allowDisproofs with
-  | .error _ =>
+  | .error e =>
+    IO.println s!"Verification failed for {t}: {e}"
     let failureMode := match targetInfo.constInfo with
       | .thmInfo _ => .thmType
       | .defnInfo _ => .defnCheck
