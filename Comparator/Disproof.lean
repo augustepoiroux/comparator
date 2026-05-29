@@ -52,6 +52,17 @@ partial def preprocessExpr (e : Expr) : Expr :=
   | .proj s i e' => .proj s i (preprocessExpr e')
   | _ => e
 
+/--
+Statically instantiates parameter level variables in `l` with their computed mapped levels.
+-/
+partial def instantiateLevel (map : Std.HashMap Name Level) (l : Level) : Level :=
+  match l with
+  | .succ l' => .succ (instantiateLevel map l')
+  | .max la lb => .max (instantiateLevel map la) (instantiateLevel map lb)
+  | .imax la lb => .imax (instantiateLevel map la) (instantiateLevel map lb)
+  | .param n => match map[n]? with | some l' => l' | none => .param n
+  | _ => l
+
 mutual
 
 /--
@@ -92,8 +103,54 @@ partial def inferType (ctx : List Expr) (constMap : Std.HashMap Name ConstantInf
     .const ``String []
   | .mdata _ e =>
     inferType ctx constMap e
-  | .proj _ _ e =>
-    inferType ctx constMap e
+  | .proj s i e =>
+    let eTy := (inferType ctx constMap e).cleanupAnnotations
+    match constMap[s]? with
+    | some (.inductInfo info) =>
+      match info.ctors with
+      | ctorName :: _ =>
+        match constMap[ctorName]? with
+        | some (.ctorInfo ctorVal) =>
+          let rec getFieldName (fIdx : Nat) (t : Expr) : Option Name :=
+            match t.cleanupAnnotations with
+            | .forallE name _ body binfo =>
+              if binfo == .default then
+                if fIdx == i then some name
+                else getFieldName (fIdx + 1) body
+              else
+                getFieldName fIdx body
+            | _ => none
+          
+          match getFieldName 0 ctorVal.type with
+          | some fName =>
+            let projName := s ++ fName
+            match constMap[projName]? with
+            | some projInfo =>
+              let structLevels :=
+                match eTy with
+                | .const _ ls => ls
+                | .app f _ =>
+                  match f.cleanupAnnotations with
+                  | .const _ ls => ls
+                  | _ => []
+                | _ => []
+              
+              let rec getArgs (expr : Expr) (acc : List Expr) : List Expr :=
+                match expr with
+                | .app f a => getArgs f (a :: acc)
+                | _ => acc
+              let structArgs := getArgs eTy []
+
+              let projType := projInfo.type.instantiateLevelParams projInfo.levelParams structLevels
+              let projType' := projType.instantiateRange 0 structArgs.length structArgs.toArray
+              match projType'.cleanupAnnotations with
+              | .forallE _ _ body _ => body.instantiate1 e
+              | _ => .sort Level.zero
+            | none => .sort Level.zero
+          | none => .sort Level.zero
+        | _ => .sort Level.zero
+      | _ => .sort Level.zero
+    | _ => .sort Level.zero
   | _ =>
     .sort Level.zero
 
@@ -135,17 +192,6 @@ where
       p
     | _ =>
       mkNot e
-
-/--
-Statically instantiates parameter level variables in `l` with their computed mapped levels.
--/
-partial def instantiateLevel (map : Std.HashMap Name Level) (l : Level) : Level :=
-  match l with
-  | .succ l' => .succ (instantiateLevel map l')
-  | .max la lb => .max (instantiateLevel map la) (instantiateLevel map lb)
-  | .imax la lb => .imax (instantiateLevel map la) (instantiateLevel map lb)
-  | .param n => match map[n]? with | some l' => l' | none => .param n
-  | _ => l
 
 mutual
 
