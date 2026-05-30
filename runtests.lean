@@ -5,6 +5,7 @@ open Lean System.FilePath IO.FS IO.Process System
 structure TestConfig where
   exit_code : Nat
   expected_output : Option (Array String) := none
+  expected_json_output : Option (Array String) := none
   deriving FromJson, ToJson
 
 inductive TestResult
@@ -103,6 +104,11 @@ def runTestProject (projectPath : FilePath) (projectName : String) (_testsDir : 
           if let .error e := Lean.Json.parse outputContent then
             IO.FS.removeDirAll tempDir
             return TestResult.error projectName s!"json_output_path file '{jsonOutputPath}' contains invalid JSON: {e}"
+          if let some expectedJsonSubstrings := config.expected_json_output then
+            for substr in expectedJsonSubstrings do
+              if !outputContent.contains substr then
+                IO.FS.removeDirAll tempDir
+                return TestResult.error projectName s!"Expected JSON output substring '{substr}' was not found.\nCaptured JSON:\n{outputContent}"
 
     IO.FS.removeDirAll tempDir
 

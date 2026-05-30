@@ -18,13 +18,27 @@ Comparator is configured through a JSON file:
     "challenge_module": "Challenge",
     "solution_module": "Solution",
     "theorem_names": ["todo1"],
+    "definition_names": ["optionalDefinitionHole"],
     "permitted_axioms": ["propext", "Quot.sound", "Classical.choice"],
-    "enable_nanoda": false
+    "enable_nanoda": false,
+    "allow_disproofs": false,
+    "must_resolve_all_sorries": true,
+    "json_output_path": "optional-report.json"
 }
 ```
 Where `Challenge.lean` contains at least a theorem named `todo1` that has a `sorry` (or any other proof)
 and `Solution.lean` is provided by a party trying to convince you that they have proven `todo1` by
 writing out the same theorem but with a proper proof attached.
+
+If `theorem_names` is omitted, comparator discovers challenge theorems whose
+compiled proof uses `sorryAx`. In that discovery mode only,
+`must_resolve_all_sorries: false` allows a solution to verify a nonempty subset
+of the discovered theorems; explicitly configured theorem names and all
+definition holes remain required targets.
+
+If `json_output_path` is provided, comparator writes a machine-readable report
+containing each requested target, the accepted solution declaration name, whether
+the target was checked directly or through disproof mode, and any failure mode.
 
 Given the following assumptions:
 1. The transitive closure of imports of `Challenge.lean` as well as `lakefile.toml`/`lakefile.lean`
@@ -48,6 +62,29 @@ All theorems in `Solution` that are listed in `theorem_names` are guaranteed to:
 1. Prove the same statement as provided in `Challenge`
 2. Use no more axioms than listed in `permitted_axioms`
 3. Be accepted by the Lean kernel
+
+## Disproofs
+When `"allow_disproofs": true`, a configured theorem `foo` may instead be
+answered by a theorem named `foo.disproof`. The direct theorem `foo` and the
+disproof theorem `foo.disproof` are mutually exclusive: if both declarations
+exist in the solution, comparator rejects the target.
+
+A disproof must have the structural negation of the challenge theorem type. Term
+universal quantifiers become existential quantifiers, and the terminal
+proposition is negated. If the terminal proposition is already `¬ P`, the
+disproof terminal is `P`. Comparator also treats `p ≠ q` as `¬ p = q` for this
+structural check.
+
+Universe parameters of the challenge theorem may be consistently instantiated
+by the solution disproof. A solution may also keep
+universe parameters general, thereby proving a stronger disproof. Repeated
+occurrences of the same challenge universe parameter must map to the same
+solution universe level; distinct challenge universe parameters may collapse to
+one solution level.
+
+Comparator intentionally does not apply general logical rewriting such as
+De Morgan transformations for `And`, `Or`, or nested `Exists`; unsupported
+shapes are rejected rather than guessed.
 
 > [!NOTE]
 > The Trusted Code Base of Landrun naturally includes the operating system and hardware it is running on, plus its sandboxing mechanism.
@@ -171,7 +208,8 @@ The comparator performs the following steps to ensure these properties:
    and `Solution` therefore need to import the default prelude.
 5. Verify that the body of all relevant theorems in the `Solution` environment only uses axioms
    listed in `permitted_axioms`
-6. Replay the `Solution` environment into the Lean kernel. Doing this within the same process as the
+6. Re-export only the accepted solution declarations and configured definition holes.
+7. Replay the `Solution` environment into the Lean kernel. Doing this within the same process as the
    comparator should be safe as the worst thing that can happen at this point is an exploit that
    makes the kernel accept when it should reject and that same exploit should also be applicable
    from within an external process.

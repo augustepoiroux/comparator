@@ -50,16 +50,13 @@ where
 end Axioms
 
 def checkAxioms (solution : Export.ExportedEnv) (theoremTargets : Array Lean.Name)
-    (definitionTargets : Array Lean.Name) (legalAxioms : Array Lean.Name) (allowDisproofs : Bool := false) : Except String Unit := do
+    (definitionTargets : Array Lean.Name) (legalAxioms : Array Lean.Name) : Except String Unit := do
   let mut worklist := #[]
   for target in theoremTargets do
-    let isDisproof := allowDisproofs && solution.constMap.contains (target ++ `disproof)
-    let actualTarget := if isDisproof then target ++ `disproof else target
-
-    let some solutionConst := solution.constMap[actualTarget]?
-      | throw s!"Const not found in solution: '{actualTarget}'"
+    let some solutionConst := solution.constMap[target]?
+      | throw s!"Const not found in solution: '{target}'"
     let .thmInfo solutionConst := solutionConst
-      | throw s!"Solution constant is not a theorem: '{actualTarget}'"
+      | throw s!"Solution constant is not a theorem: '{target}'"
     worklist := worklist.push solutionConst.name
 
   for target in definitionTargets do
