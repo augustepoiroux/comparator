@@ -58,5 +58,4 @@ if [[ $# -eq 0 ]]; then
   exit 2
 fi
 
-echo "WARNING: THIS IS NOT REAL LANDRUN! UNSAFELY RUNNING exec $*" >&2
 exec "$@"
