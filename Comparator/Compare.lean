@@ -77,7 +77,7 @@ def definitionHoleMatches (challengeHole solutionHole : Lean.DefinitionVal) : Bo
     && challengeHole.safety == solutionHole.safety
 
 def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array TheoremTarget)
-    (definitionTargets : Array Lean.Name) (primitive : Array Lean.Name) : Except String Unit := do
+    (definitionTargets : Array Lean.Name) (primitive : Array Lean.Name) : IO (Except String Unit) := ExceptT.run do
   let mut worklist := primitive
 
   for target in theoremTargets do
@@ -105,12 +105,10 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
       let .thmInfo solutionVal := solutionConst
         | throw s!"Solution disproof target is not a theorem: '{target.solutionName}'"
 
-      match Disproof.check challengeVal.levelParams challengeVal.type solutionVal.type with
-      | .ok () => pure ()
-      | .error e =>
-        throw s!"Solution disproof statement does not match negated challenge theorem statement: '{target.solutionName}'\n{e}"
+      unless ← Disproof.check challengeVal.levelParams challengeVal.type solutionVal.type do
+        throw s!"Solution disproof statement does not match accepted disproof interface: '{target.solutionName}'"
 
-      worklist := worklist ++ challengeVal.type.getUsedConstants ++ solutionVal.type.getUsedConstants
+      worklist := worklist ++ challengeVal.type.getUsedConstants
 
   for target in definitionTargets do
     let some challengeConst := challenge.constMap[target]?
@@ -130,6 +128,8 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
     worklist := worklist.push solutionConst.name
 
   let definitionTargets := Std.HashSet.ofArray definitionTargets
-  Compare.loop.run { challenge, solution, definitionTargets } |>.run' { worklist, checked := {} }
+  match Compare.loop.run { challenge, solution, definitionTargets } |>.run' { worklist, checked := {} } with
+  | .ok () => pure ()
+  | .error e => throw e
 
 end Comparator

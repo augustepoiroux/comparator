@@ -3,5 +3,5 @@ structure MyStruct.{u} where
   A : Type u
   B : Type u
 
-theorem foo.disproof : ∃ (s : MyStruct.{1}), ∃ (h : s.B), ¬ False :=
-  ⟨⟨PUnit.{2}, PUnit.{2}⟩, PUnit.unit.{2}, fun h => h⟩
+theorem foo.disproof (h : ∀ (s : MyStruct.{1}) (x : s.B), False) : False :=
+  h ⟨PUnit.{2}, PUnit.{2}⟩ PUnit.unit.{2}

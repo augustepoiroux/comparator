@@ -69,11 +69,18 @@ answered by a theorem named `foo.disproof`. The direct theorem `foo` and the
 disproof theorem `foo.disproof` are mutually exclusive: if both declarations
 exist in the solution, comparator rejects the target.
 
-A disproof must have the structural negation of the challenge theorem type. Term
-universal quantifiers become existential quantifiers, and the terminal
-proposition is negated. If the terminal proposition is already `¬ P`, the
-disproof terminal is `P`. Comparator also treats `p ≠ q` as `¬ p = q` for this
-structural check.
+A disproof must show that one instance of the original target type implies
+`False`. Comparator accepts either of these interfaces:
+
+```lean
+theorem foo.disproof (h : <foo target type at some universe instance>) : False := ...
+theorem foo.disproof : ¬ (<foo target type at some universe instance>) := ...
+```
+
+All logical rewriting belongs in the Lean proof of `foo.disproof`. For example,
+if a counterexample theorem proves `∃ x, ¬ P x`, the solution should add a
+wrapper theorem whose hypothesis is the original `∀ x, P x` target instance and
+derive `False` inside the proof.
 
 Universe parameters of the challenge theorem may be consistently instantiated
 by the solution disproof. A solution may also keep
@@ -82,9 +89,10 @@ occurrences of the same challenge universe parameter must map to the same
 solution universe level; distinct challenge universe parameters may collapse to
 one solution level.
 
-Comparator intentionally does not apply general logical rewriting such as
-De Morgan transformations for `And`, `Or`, or nested `Exists`; unsupported
-shapes are rejected rather than guessed.
+Comparator checks the interface by asking Lean whether the submitted disproof
+type is definitionally equal to `<target type at fresh universe metavariables> →
+False`. It does not synthesize a pushed negation or apply logical rewriting such
+as pushing negations through quantifiers and connectives.
 
 > [!NOTE]
 > The Trusted Code Base of Landrun naturally includes the operating system and hardware it is running on, plus its sandboxing mechanism.

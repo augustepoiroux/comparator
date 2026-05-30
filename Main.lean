@@ -268,8 +268,8 @@ def getMustResolveAllSorries : M Bool := do return (← read).mustResolveAllSorr
 @[inline]
 def getJsonOutputPath : M (Option String) := do return (← read).jsonOutputPath
 
-def disproofCoreTargets : Array Lean.Name :=
-  #[``Exists, ``Not]
+def disproofExportRoots : Array Lean.Name :=
+  #[``Not, ``Nonempty]
 
 def disproofName (n : Lean.Name) : Lean.Name :=
   n ++ `disproof
@@ -411,7 +411,7 @@ def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name)
   let defsToCompare := definitionNames.filter deps.contains
   let target := { challengeName := t, solutionName := actualName, mode := mode }
 
-  match Comparator.compareAt challenge solution #[target] defsToCompare #[] with
+  match ← Comparator.compareAt challenge solution #[target] defsToCompare #[] with
   | .error e =>
     IO.println s!"Verification failed for {t}: {e}"
     let failure := if mode == .disproof then .disproofType else .thmType
@@ -438,7 +438,7 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name)
   if targetKind != solutionKind then
     return failedOutcome (some targetInfo') (some solutionInfo') "definition" "configured" none (some d) (.kind targetKind solutionKind)
 
-  match Comparator.compareAt challenge solution #[] #[d] #[] with
+  match ← Comparator.compareAt challenge solution #[] #[d] #[] with
   | .error e =>
     IO.println s!"Definition check failed for {d}: {e}"
     return failedOutcome (some targetInfo') (some solutionInfo') "definition" "configured" none (some d) .defnCheck
@@ -462,7 +462,7 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
   let legalAxioms ← getLegalAxioms
   let mustResolveAllSorries ← getMustResolveAllSorries
 
-  IO.ofExcept <| Comparator.compareAt challenge solution (legalAxioms.map directTarget) #[] primTargets
+  IO.ofExcept <| ← Comparator.compareAt challenge solution (legalAxioms.map directTarget) #[] primTargets
 
   let mut outcomes : Array (Lean.Name × SafeVerifyOutcome) := #[]
   let mut acceptedTheorems := #[]
@@ -522,7 +522,7 @@ def compareIt : M Unit := do
   let configTheoremNames ← getTheoremNames
   let discoveredMode := configTheoremNames.isEmpty
   let allowDisproofs ← getAllowDisproofs
-  let disproofTargets := if allowDisproofs then disproofCoreTargets else #[]
+  let extraExportRoots := if allowDisproofs then disproofExportRoots else #[]
   let (theoremNames, challengeExport) ← do
     if discoveredMode then
       let projectDir ← getProjectDir
@@ -535,21 +535,20 @@ def compareIt : M Unit := do
             discovered := discovered.push val.name
       let discoveredTheoremNames := discovered
       let challengeExportTargets := (← builtinTargets) ++ discoveredTheoremNames ++ (← getLegalAxioms)
-        ++ (← primitiveTargets) ++ (← getDefinitionNames) ++ disproofTargets
+        ++ (← primitiveTargets) ++ (← getDefinitionNames) ++ extraExportRoots
       let challengeExport ← safeExport challengeModule challengeExportTargets
       pure (discoveredTheoremNames, challengeExport)
     else
       let challengeExportTargets := (← builtinTargets) ++ configTheoremNames ++ (← getLegalAxioms)
-        ++ (← primitiveTargets) ++ (← getDefinitionNames) ++ disproofTargets
+        ++ (← primitiveTargets) ++ (← getDefinitionNames) ++ extraExportRoots
       let challengeExport ← safeExport challengeModule challengeExportTargets
       pure (configTheoremNames, challengeExport)
 
   let solutionModule ← getSolutionModule
   IO.ofExcept <| ← safeLakeBuild solutionModule
 
-  let initialSolutionExportTargets := (← builtinTargets) ++ theoremNames ++ (← getLegalAxioms)
-    ++ (← primitiveTargets) ++ (← getDefinitionNames) ++ disproofTargets
-  let mut initialSolutionExportTargets := initialSolutionExportTargets
+  let mut initialSolutionExportTargets := (← builtinTargets) ++ theoremNames ++ (← getLegalAxioms)
+    ++ (← primitiveTargets) ++ (← getDefinitionNames) ++ extraExportRoots
   if allowDisproofs then
     initialSolutionExportTargets := initialSolutionExportTargets ++ theoremNames.map disproofName
 
@@ -560,7 +559,7 @@ def compareIt : M Unit := do
   let result ← verifyMatch challengeExport solutionExport theoremNames allowPartialTheoremFailures theoremOrigin
 
   let verifiedSolutionExportTargets := (← builtinTargets) ++ result.acceptedTheorems ++ (← getLegalAxioms)
-    ++ (← primitiveTargets) ++ (← getDefinitionNames) ++ disproofTargets
+    ++ (← primitiveTargets) ++ (← getDefinitionNames) ++ extraExportRoots
   let verifiedSolutionExport ← safeExport solutionModule verifiedSolutionExportTargets
 
   if ← getNanodaEnabled then

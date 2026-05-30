@@ -1,1 +1,1 @@
-theorem foo.disproof : ∃ _x : Nat, 1 + 1 = 2 := ⟨0, rfl⟩
+theorem foo.disproof (h : ∀ x : Nat, ¬ 1 + 1 = 2) : False := h 0 rfl
