@@ -437,10 +437,9 @@ def throwFailures (header : String) (failures : Array (Lean.Name × Verification
   throw <| .userError msg
 
 def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNames : Array Lean.Name)
-    (allowPartialTheoremFailures : Bool) : M VerifyResult := do
+    (definitionNames : Array Lean.Name) (allowPartialTheoremFailures : Bool) : M VerifyResult := do
   let challenge ← Export.parseStream (← stringStream challengeExport)
   let solution ← Export.parseStream (← stringStream solutionExport)
-  let definitionNames ← getDefinitionNames
   let primTargets ← primitiveTargets
   let legalAxioms ← getLegalAxioms
   let mustResolveAllSorries ← getMustResolveAllSorries
@@ -491,35 +490,38 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
   return result
 
 
-def getTargets (theorems : Array Lean.Name) : M (Array Lean.Name) := do
-  return (← builtinTargets) ++ theorems ++ (← getLegalAxioms) ++ (← primitiveTargets) ++ (← getDefinitionNames)
+def getTargets (theorems : Array Lean.Name) (definitions : Array Lean.Name) : M (Array Lean.Name) := do
+  return (← builtinTargets) ++ theorems ++ (← getLegalAxioms) ++ (← primitiveTargets) ++ definitions
 
 def compareIt : M Unit := do
   let challengeModule ← getChallengeModule
   safeLakeBuild challengeModule
 
   let configTheoremNames ← getTheoremNames
+  let configDefinitionNames ← getDefinitionNames
   let discoveredMode := configTheoremNames.isEmpty
   let allowDisproofs ← getAllowDisproofs
 
-  let theoremNames ←
+  let (theoremNames, definitionNames) ←
     if discoveredMode then
-      runQueryDecls "find-sorries" challengeModule
+      let thms ← runQueryDecls "find-sorry-theorems" challengeModule
+      let defs ← runQueryDecls "find-sorry-defs" challengeModule
+      pure (thms, defs)
     else
-      pure configTheoremNames
+      pure (configTheoremNames, configDefinitionNames)
 
-  let challengeExport ← safeExport challengeModule (← getTargets theoremNames)
+  let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames)
 
   let solutionModule ← getSolutionModule
   safeLakeBuild solutionModule
 
-  let initialSolutionExportTargets := (← getTargets theoremNames) ++ (if allowDisproofs then theoremNames.map disproofName else #[])
+  let initialSolutionExportTargets := (← getTargets theoremNames definitionNames) ++ (if allowDisproofs then theoremNames.map disproofName else #[])
   let solutionExport ← safeExport solutionModule initialSolutionExportTargets
 
   let allowPartialTheoremFailures := !(← getMustResolveAllSorries)
-  let result ← verifyMatch challengeExport solutionExport theoremNames allowPartialTheoremFailures
+  let result ← verifyMatch challengeExport solutionExport theoremNames definitionNames allowPartialTheoremFailures
 
-  let verifiedSolutionExport ← safeExport solutionModule (← getTargets result.acceptedTheorems)
+  let verifiedSolutionExport ← safeExport solutionModule (← getTargets result.acceptedTheorems definitionNames)
 
   if ← getNanodaEnabled then
     runNanoda verifiedSolutionExport
