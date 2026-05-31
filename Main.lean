@@ -503,7 +503,7 @@ def compareIt : M Unit := do
   let initialSolutionExportTargets := (← getTargets theoremNames) ++ (if allowDisproofs then theoremNames.map disproofName else #[])
   let solutionExport ← safeExport solutionModule initialSolutionExportTargets
 
-  let allowPartialTheoremFailures := discoveredMode && !(← getMustResolveAllSorries)
+  let allowPartialTheoremFailures := !(← getMustResolveAllSorries)
   let result ← verifyMatch challengeExport solutionExport theoremNames allowPartialTheoremFailures
 
   let verifiedSolutionExport ← safeExport solutionModule (← getTargets result.acceptedTheorems)

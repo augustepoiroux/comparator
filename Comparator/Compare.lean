@@ -27,7 +27,7 @@ def checkDisproof (challengeType : Expr) (challengeLevelParams : List Name) (sol
   let checkAction : MetaM Bool := do
     let us ← challengeLevelParams.mapM fun _ => mkFreshLevelMVar
     let expected := Expr.forallE `_h (challengeType.instantiateLevelParams challengeLevelParams us) (mkConst ``False) .default
-    withTransparency .reducible <| isDefEq solutionType expected
+    isDefEq solutionType expected
   let (res, _) ← (checkAction.run').toIO { fileName := "", fileMap := default } { env := env }
   return res
 
