@@ -39,7 +39,8 @@ The following optional configuration fields control target selection and reporti
 
 If and only if both `theorem_names` and `definition_names` are omitted, comparator discovers targets
 automatically. It selects theorems and reducible definitions declared in the challenge whose values
-contain `sorryAx`. Opaque declarations are not selected as definition holes.
+contain `sorryAx`. Opaque declarations are not selected as definition holes. Comparator rejects a
+challenge when no verification target is selected or found.
 
 Given the following assumptions:
 1. The transitive closure of imports of `Challenge.lean` as well as `lakefile.toml`/`lakefile.lean`

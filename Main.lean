@@ -518,6 +518,9 @@ def compareIt : M Unit := do
     else
       pure (configTheoremNames, configDefinitionNames)
 
+  if theoremNames.isEmpty && definitionNames.isEmpty then
+    throw <| .userError "No verification targets selected or found."
+
   let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames)
 
   let solutionModule ← getSolutionModule
