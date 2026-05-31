@@ -103,6 +103,15 @@ def runTestProject (projectPath : FilePath) (projectName : String) (_testsDir : 
 
     createAdditionalFiles tempDir
 
+    let projectDir ← IO.FS.realPath "."
+    IO.FS.createDirAll (tempDir / ".lake")
+    let _ ← runCommandInDir tempDir "ln" #["-sf", (projectDir / ".lake" / "packages").toString, (tempDir / ".lake" / "packages").toString]
+
+    if (← IO.FS.readFile (tempDir / "lakefile.toml")).contains "mathlib" then
+      let (cacheExit, cacheOut) ← runCommandInDir tempDir "lake" #["exe", "cache", "get"]
+      if cacheExit != 0 then
+        IO.println s!"Warning: lake exe cache get exited with {cacheExit}:\n{cacheOut}"
+
     let (exitCode, outputTrace) ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"]
 
     -- If expected_output substrings are specified, verify they exist in the trace
