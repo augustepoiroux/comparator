@@ -23,6 +23,7 @@ structure Context where
   whichLandrun : String
   whichLean4Export : String
   whichNanoda : String
+  mustResolveAllSorries : Bool
 
 abbrev M := ReaderT Context IO
 
@@ -241,32 +242,84 @@ def stringStream (s : String) : BaseIO IO.FS.Stream := do
   }
   return IO.FS.Stream.ofBuffer ref
 
+@[inline]
+def getMustResolveAllSorries : M Bool := do return (← read).mustResolveAllSorries
+
+structure VerifyResult where
+  acceptedTheorems : Array Lean.Name
+
+def throwFailures (header : String) (failures : Array (Lean.Name × String)) : M α := do
+  let mut msg := header
+  for (name, failure) in failures do
+    msg := msg ++ s!"- {name}: {failure}\n"
+  throw <| .userError msg
+
 def verifyMatch (challengeExport : String) (solutionExport : String) :
-    M Unit := do
+    M VerifyResult := do
   let challenge ← Export.parseStream (← stringStream challengeExport)
   let solution ← Export.parseStream (← stringStream solutionExport)
   let theoremNames ← getTheoremNames
   let definitionNames ← getDefinitionNames
-  let targets := (← getTheoremNames) ++ (← getLegalAxioms)
-  IO.ofExcept <| Comparator.compareAt challenge solution targets definitionNames (← primitiveTargets)
-  IO.ofExcept <| Comparator.checkAxioms solution theoremNames definitionNames (← getLegalAxioms)
-  if ← getNanodaEnabled then
-    runNanoda solutionExport
-  runKernel solution
+  let legalAxioms ← getLegalAxioms
+  let mustResolveAllSorries ← getMustResolveAllSorries
+
+  IO.ofExcept <| Comparator.compareAt challenge solution legalAxioms #[] (← primitiveTargets)
+
+  let mut acceptedTheorems := #[]
+  let mut theoremFailures := #[]
+  for theoremName in theoremNames do
+    match Comparator.compareAt challenge solution #[theoremName] definitionNames #[] with
+    | .error e => theoremFailures := theoremFailures.push (theoremName, e)
+    | .ok () =>
+      if let .error e := Comparator.checkAxioms solution #[theoremName] #[] legalAxioms then
+        theoremFailures := theoremFailures.push (theoremName, e)
+      else
+        acceptedTheorems := acceptedTheorems.push theoremName
+
+  let mut definitionFailures := #[]
+  for definitionName in definitionNames do
+    match Comparator.compareAt challenge solution #[] #[definitionName] #[] with
+    | .error e => definitionFailures := definitionFailures.push (definitionName, e)
+    | .ok () =>
+      if let .error e := Comparator.checkAxioms solution #[] #[definitionName] legalAxioms then
+        definitionFailures := definitionFailures.push (definitionName, e)
+
+  if !definitionFailures.isEmpty then
+    throwFailures "Some definition targets failed:\n" definitionFailures
+  if acceptedTheorems.isEmpty && !theoremNames.isEmpty then
+    throwFailures "All theorem targets failed:\n" theoremFailures
+  if mustResolveAllSorries && !theoremFailures.isEmpty then
+    throwFailures "Some theorem targets failed:\n" theoremFailures
+  if !theoremFailures.isEmpty then
+    IO.println "Warnings/Diagnostics for unsolved/failed theorems:"
+    for (name, failure) in theoremFailures do
+      IO.println s!"WARNING: Theorem '{name}' remained unsolved: {failure}"
+
+  return { acceptedTheorems }
+
+def getTargets (theorems definitions : Array Lean.Name) : M (Array Lean.Name) := do
+  return (← builtinTargets) ++ theorems ++ (← getLegalAxioms) ++ (← primitiveTargets) ++ definitions
 
 def compareIt : M Unit := do
-  let exportTargets := (← builtinTargets) ++ (← getTheoremNames) ++ (← getLegalAxioms)
-    ++ (← primitiveTargets) ++ (← getDefinitionNames)
+  let theoremNames ← getTheoremNames
+  let definitionNames ← getDefinitionNames
 
   let challengeModule ← getChallengeModule
   safeLakeBuild challengeModule
-  let challengeExport ← safeExport challengeModule exportTargets
+  let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames)
 
   let solutionModule ← getSolutionModule
   safeLakeBuild solutionModule
-  let solutionExport ← safeExport solutionModule exportTargets
+  let solutionExport ← safeExport solutionModule (← getTargets theoremNames definitionNames)
 
-  verifyMatch challengeExport solutionExport
+  let result ← verifyMatch challengeExport solutionExport
+  let verifiedSolutionExport ← safeExport solutionModule (← getTargets result.acceptedTheorems definitionNames)
+
+  if ← getNanodaEnabled then
+    runNanoda verifiedSolutionExport
+
+  let verifiedSolution ← Export.parseStream (← stringStream verifiedSolutionExport)
+  runKernel verifiedSolution
 
   IO.println "Your solution is okay!"
 
@@ -277,6 +330,7 @@ structure Config where
   definition_names : Option (Array String) := none
   permitted_axioms : Array String
   enable_nanoda : Bool
+  must_resolve_all_sorries : Option Bool := none
   deriving Lean.FromJson, Lean.ToJson, Repr
 
 def M.run (x : M α) (cfg : Config) : IO α := do
@@ -299,6 +353,7 @@ def M.run (x : M α) (cfg : Config) : IO α := do
     whichLean4Export,
     whichLandrun,
     whichNanoda
+    mustResolveAllSorries := cfg.must_resolve_all_sorries.getD true
   }
 
 end Comparator

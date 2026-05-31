@@ -26,6 +26,10 @@ Where `Challenge.lean` contains at least a theorem named `todo1` that has a `sor
 and `Solution.lean` is provided by a party trying to convince you that they have proven `todo1` by
 writing out the same theorem but with a proper proof attached.
 
+Set `must_resolve_all_sorries` to `false` to accept a submission when at least one theorem target
+succeeds. Failed theorem targets are reported as warnings. Definition targets always remain mandatory.
+The option defaults to `true`.
+
 Given the following assumptions:
 1. The transitive closure of imports of `Challenge.lean` as well as `lakefile.toml`/`lakefile.lean`
    are controlled by you or trustworthy.
