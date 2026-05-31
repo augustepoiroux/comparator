@@ -9,8 +9,10 @@ well as:
    this directory must be present in `PATH`
 
 > [!NOTE]
-> Alternatively full paths to these binaries can be specified using the environment variables
-> `COMPARATOR_LANDRUN`, `COMPARATOR_LEAN4EXPORT`, and `COMPARATOR_NANODA` when invoking Comparator.
+> Alternatively full paths to these binaries can be specified using `COMPARATOR_LANDRUN`,
+> `COMPARATOR_LEAN4EXPORT`, and `COMPARATOR_NANODA`. Comparator expects the compiled `query_decls`
+> helper next to its own binary by default; use `COMPARATOR_QUERY_DECLS` to override that binary path
+> when deploying it elsewhere.
 
 Comparator is configured through a JSON file:
 ```
@@ -25,6 +27,11 @@ Comparator is configured through a JSON file:
 Where `Challenge.lean` contains at least a theorem named `todo1` that has a `sorry` (or any other proof)
 and `Solution.lean` is provided by a party trying to convince you that they have proven `todo1` by
 writing out the same theorem but with a proper proof attached.
+
+If and only if both `theorem_names` and `definition_names` are omitted, comparator discovers targets
+automatically. It selects theorems and reducible definitions declared in the challenge whose values
+directly contain `sorryAx`. Opaque declarations are not selected as definition holes. Comparator
+rejects a challenge when no verification target is selected or found.
 
 Given the following assumptions:
 1. The transitive closure of imports of `Challenge.lean` as well as `lakefile.toml`/`lakefile.lean`
@@ -127,7 +134,7 @@ The `scripts/fake-landrun.sh` can be used to replace Landrun in development if y
 The following commands, starting from the root directory of a fresh git checkout, will build and run `comparator` on one of the test examples:
 
 ```sh
-lake build lean4export comparator
+lake build lean4export comparator query_decls
 
 cd tests/projects/simple_mismatch
 
@@ -148,7 +155,7 @@ COMPARATOR_LANDRUN=$(realpath ../../../scripts/fake-landrun.sh) COMPARATOR_LEAN4
 The following commands, starting from the root directory of a fresh git checkout, will build and run the tests:
 
 ```sh
-lake build lean4export comparator
+lake build lean4export comparator query_decls
 COMPARATOR_LANDRUN=$(realpath scripts/fake-landrun.sh) COMPARATOR_LEAN4EXPORT=$(realpath .lake/packages/lean4export/.lake/build/bin/lean4export) lean --run runtests.lean
 ```
 
@@ -162,16 +169,19 @@ The comparator performs the following steps to ensure these properties:
 1. Build `Challenge` using `lake` in a `landrun` sandbox that has:
    - read access to the entire file system and write access to `/dev`
    - write access to the `.lake` directory of the project
-2. Run `lean4export` on the produced `Challenge.olean` in a `landrun` sandbox that has:
+2. Inspect declarations in the produced `Challenge.olean` using the compiled `query_decls` helper in a
+   sandboxed subprocess. The helper is separate from comparator so `.olean` deserialization cannot be
+   called accidentally inside the trusted parent process.
+3. Run `lean4export` on the produced `Challenge.olean` in a `landrun` sandbox that has:
    - read access to the entire file system and write access to `/dev`
-3. Repeat the same build sandboxed and export sandboxed steps with `Solution`
-4. Verify that all declarations used in the statement of all relevant theorems in `Challenge`
+4. Repeat the same build, declaration inspection and export steps with `Solution`
+5. Verify that all declarations used in the statement of all relevant theorems in `Challenge`
    are the same as in the `Solution` environment.
    This always includes the declarations from `Init` with special meaning to the kernel. Both `Challenge`
    and `Solution` therefore need to import the default prelude.
-5. Verify that the body of all relevant theorems in the `Solution` environment only uses axioms
+6. Verify that the body of all relevant theorems in the `Solution` environment only uses axioms
    listed in `permitted_axioms`
-6. Replay the `Solution` environment into the Lean kernel. Doing this within the same process as the
+7. Replay the `Solution` environment into the Lean kernel. Doing this within the same process as the
    comparator should be safe as the worst thing that can happen at this point is an exploit that
    makes the kernel accept when it should reject and that same exploit should also be applicable
    from within an external process.

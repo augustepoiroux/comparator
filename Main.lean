@@ -20,6 +20,7 @@ structure Context where
   leanPrefix : System.FilePath
   gitLocation : System.FilePath
   enableNanoda : Bool
+  autoDiscover : Bool
   whichLandrun : String
   whichLean4Export : String
   whichNanoda : String
@@ -61,6 +62,9 @@ def getGitLocation : M System.FilePath := do return (← read).gitLocation
 
 @[inline]
 def getNanodaEnabled : M Bool := do return (← read).enableNanoda
+
+@[inline]
+def getAutoDiscover : M Bool := do return (← read).autoDiscover
 
 def queryGitLocation : IO System.FilePath := do
   let out ← IO.Process.run {
@@ -133,23 +137,30 @@ def safeLakeBuild (target : Lean.Name) : M Unit := do
     executablePaths := #[leanPrefix, gitLocation]
   }
 
-def safeExport (module : Lean.Name) (decls : Array Lean.Name) : M String := do
-  IO.println s!"Exporting {decls} from {module}"
-  let baseArgs := #[module.toString, "--"]
-  let args := decls.foldl (·.push <| ·.toString) baseArgs
+def nameToOleanPath (projectDir : System.FilePath) (name : Lean.Name) : System.FilePath :=
+  let components := name.components.map (·.toString (escape := false))
+  components.foldl (· / ·) (projectDir / ".lake" / "build" / "lib" / "lean") |>.withExtension "olean"
 
-  let leanPrefix ← getLeanPrefix
+def runQueryDecls (mode : String) (module : Lean.Name) : M (Array Lean.Name) := do
   let projectDir ← getProjectDir
-  let dotLakeDir := projectDir / ".lake"
-  runSandBoxedWithStdout {
-    cmd := (← read).whichLean4Export
-    args := args,
+  let oleanPath := nameToOleanPath projectDir module
+  let queryDeclsPath := (← IO.appPath).parent.getD "" / "query_decls"
+  let whichQueryDecls ←
+    match ← IO.getEnv "COMPARATOR_QUERY_DECLS" with
+    | some path => pure path
+    | none => try pure (← IO.FS.realPath queryDeclsPath).toString catch _ => pure "query_decls"
+
+  let stdout ← runSandBoxedWithStdout {
+    cmd := whichQueryDecls,
+    args := #[mode, oleanPath.toString],
     envPass := #["PATH", "HOME", "LEAN_PATH", "LEAN_ABORT_ON_PANIC"]
     envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
-    readablePaths := #[projectDir, dotLakeDir]
+    readablePaths := #[projectDir, projectDir / ".lake", whichQueryDecls]
     writablePaths := #[]
-    executablePaths := #[leanPrefix]
+    executablePaths := #[whichQueryDecls]
   }
+
+  return (stdout.splitOn "\n" |>.filter (!·.isEmpty) |>.map String.toName).toArray
 
 def runNanoda (solutionExport : String) : M Unit := do
   IO.println "Running nanoda kernel on solution"
@@ -235,6 +246,34 @@ def builtinTargets : M (Array Lean.Name) := do
   else
     return #[]
 
+def filterExportTargets (module : Lean.Name) (decls : Array Lean.Name) : M (Array Lean.Name) := do
+  let localDecls ← runQueryDecls "list-decls" module
+  let localConsts := Std.HashSet.ofArray localDecls
+  let coreConsts := Std.HashSet.ofArray ((← primitiveTargets) ++ (← builtinTargets) ++ (← getLegalAxioms))
+  return decls.filter fun t => coreConsts.contains t || localConsts.contains t
+
+def safeExport (module : Lean.Name) (decls : Array Lean.Name) : M String := do
+  let decls ← filterExportTargets module decls
+  IO.println s!"Exporting {decls} from {module}"
+  let args :=
+    if decls.isEmpty then
+      #[module.toString]
+    else
+      decls.foldl (·.push <| ·.toString) #[module.toString, "--"]
+
+  let leanPrefix ← getLeanPrefix
+  let projectDir ← getProjectDir
+  let dotLakeDir := projectDir / ".lake"
+  runSandBoxedWithStdout {
+    cmd := (← read).whichLean4Export
+    args := args,
+    envPass := #["PATH", "HOME", "LEAN_PATH", "LEAN_ABORT_ON_PANIC"]
+    envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
+    readablePaths := #[projectDir, dotLakeDir]
+    writablePaths := #[]
+    executablePaths := #[leanPrefix]
+  }
+
 def stringStream (s : String) : BaseIO IO.FS.Stream := do
   let ref ← IO.mkRef {
     data := s.toByteArray
@@ -255,25 +294,37 @@ def verifyMatch (challengeExport : String) (solutionExport : String) :
   runKernel solution
 
 def compareIt : M Unit := do
-  let exportTargets := (← builtinTargets) ++ (← getTheoremNames) ++ (← getLegalAxioms)
-    ++ (← primitiveTargets) ++ (← getDefinitionNames)
-
   let challengeModule ← getChallengeModule
   safeLakeBuild challengeModule
+  let theoremNames ← if ← getAutoDiscover then
+    runQueryDecls "find-sorry-theorems" challengeModule
+  else
+    getTheoremNames
+  let definitionNames ← if ← getAutoDiscover then
+    runQueryDecls "find-sorry-defs" challengeModule
+  else
+    getDefinitionNames
+
+  if theoremNames.isEmpty && definitionNames.isEmpty then
+    throw <| .userError "No verification targets selected or found."
+
+  let exportTargets := (← builtinTargets) ++ theoremNames ++ (← getLegalAxioms)
+    ++ (← primitiveTargets) ++ definitionNames
   let challengeExport ← safeExport challengeModule exportTargets
 
   let solutionModule ← getSolutionModule
   safeLakeBuild solutionModule
   let solutionExport ← safeExport solutionModule exportTargets
 
-  verifyMatch challengeExport solutionExport
+  withReader (fun ctx => { ctx with theoremNames, definitionNames }) do
+    verifyMatch challengeExport solutionExport
 
   IO.println "Your solution is okay!"
 
 structure Config where
   challenge_module : String
   solution_module : String
-  theorem_names : Array String
+  theorem_names : Option (Array String) := none
   definition_names : Option (Array String) := none
   permitted_axioms : Array String
   enable_nanoda : Bool
@@ -290,12 +341,13 @@ def M.run (x : M α) (cfg : Config) : IO α := do
     projectDir := cwd
     challengeModule := cfg.challenge_module.toName,
     solutionModule := cfg.solution_module.toName,
-    theoremNames := cfg.theorem_names.map String.toName,
+    theoremNames := cfg.theorem_names.getD #[] |>.map String.toName,
     definitionNames := cfg.definition_names.getD #[] |>.map String.toName,
     legalAxioms := cfg.permitted_axioms.map String.toName,
     leanPrefix := leanPrefix,
     gitLocation := gitLocation,
     enableNanoda := cfg.enable_nanoda,
+    autoDiscover := cfg.theorem_names.isNone && cfg.definition_names.isNone,
     whichLean4Export,
     whichLandrun,
     whichNanoda

@@ -1,6 +1,6 @@
 name = "Comparator"
 version = "0.1.0"
-defaultTargets = ["comparator"]
+defaultTargets = ["comparator", "query_decls"]
 
 [[lean_lib]]
 name = "Comparator"
@@ -8,6 +8,10 @@ name = "Comparator"
 [[lean_exe]]
 name = "comparator"
 root = "Main"
+
+[[lean_exe]]
+name = "query_decls"
+root = "scripts.QueryDecls"
 
 [[require]]
 scope = "leanprover"

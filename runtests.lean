@@ -25,6 +25,7 @@ open Lean System.FilePath IO.FS IO.Process System
 
 structure TestConfig where
   exit_code : Nat
+  expected_output : Option (Array String) := none
   deriving FromJson, ToJson
 
 inductive TestResult
@@ -65,14 +66,13 @@ name = \"Challenge\"
 "
     IO.FS.writeFile (dir / "lakefile.toml") lakefileContent
 
-def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) : IO Nat := do
-  let output ← IO.Process.spawn {
+def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) : IO (Nat × String) := do
+  let output ← IO.Process.output {
     cmd := cmd
     args := args
     cwd := some dir
   }
-  let exitCode ← output.wait
-  pure exitCode.toNat
+  pure (output.exitCode.toNat, output.stdout ++ "\n" ++ output.stderr)
 
 def readTestConfig (configPath : FilePath) : IO TestConfig := do
   let content ← IO.FS.readFile configPath
@@ -101,7 +101,11 @@ def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : F
 
     createAdditionalFiles tempDir
 
-    let exitCode ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"]
+    let (exitCode, output) ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"]
+    for expected in config.expected_output.getD #[] do
+      if !output.contains expected then
+        IO.FS.removeDirAll tempDir
+        return TestResult.error projectName s!"Expected output trace substring '{expected}' was not found.\nCaptured output:\n{output}"
 
     IO.FS.removeDirAll tempDir
 
