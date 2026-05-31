@@ -108,6 +108,10 @@ def runTestProject (projectPath : FilePath) (projectName : String) (_testsDir : 
     let _ ← runCommandInDir tempDir "ln" #["-sf", (projectDir / ".lake" / "packages").toString, (tempDir / ".lake" / "packages").toString]
 
     if (← IO.FS.readFile (tempDir / "lakefile.toml")).contains "mathlib" then
+      let (updateExit, updateOut) ← runCommandInDir tempDir "lake" #["update"]
+      if updateExit != 0 then
+        IO.FS.removeDirAll tempDir
+        return TestResult.error projectName s!"lake update exited with {updateExit}:\n{updateOut}"
       let (cacheExit, cacheOut) ← runCommandInDir tempDir "lake" #["exe", "cache", "get"]
       if cacheExit != 0 then
         IO.println s!"Warning: lake exe cache get exited with {cacheExit}:\n{cacheOut}"

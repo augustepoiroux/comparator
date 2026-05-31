@@ -1,6 +1,6 @@
 /-
   CHALLENGE: Universe-Dependent Isomorphism Target Spec
-  Tests valid disproofs under a target that strictly depends on and uses 
+  Tests valid disproofs under a target that strictly depends on and uses
   the universe level parameter u:
   ∀ {α : Type u} (x : α), Nonempty (Equiv α PUnit.{u+1})
 -/

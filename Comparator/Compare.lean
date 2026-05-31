@@ -23,13 +23,16 @@ structure TheoremTarget where
   deriving Inhabited, ToJson, Repr
 
 def checkDisproof (challengeType : Expr) (challengeLevelParams : List Name) (solutionType : Expr) : IO Bool := do
-  let env ← importModules #[{ module := `Init }] {} 0
-  let checkAction : MetaM Bool := do
-    let us ← challengeLevelParams.mapM fun _ => mkFreshLevelMVar
-    let expected := Expr.forallE `_h (challengeType.instantiateLevelParams challengeLevelParams us) (mkConst ``False) .default
-    isDefEq solutionType expected
-  let (res, _) ← (checkAction.run').toIO { fileName := "", fileMap := default } { env := env }
-  return res
+  try
+    let env ← importModules #[{ module := `Init }] {} 0
+    let checkAction : MetaM Bool := do
+      let us ← challengeLevelParams.mapM fun _ => mkFreshLevelMVar
+      let expected := Expr.forallE `_h (challengeType.instantiateLevelParams challengeLevelParams us) (mkConst ``False) .default
+      isDefEq solutionType expected
+    let (res, _) ← (checkAction.run').toIO { fileName := "", fileMap := default } { env := env }
+    return res
+  catch _ =>
+    return false
 
 namespace Compare
 

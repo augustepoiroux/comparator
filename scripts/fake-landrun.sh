@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # insecure and vibesick landrun shim that doesn't sandbox
-# don't use if you want any security obviously, intended for development on 
+# don't use if you want any security obviously, intended for development on
 # systems that don't support landrun (i.e. OSX)
 
 set -euo pipefail

@@ -6,23 +6,16 @@ def main (args : List String) : IO Unit := do
   let (modData, _) ← Lean.readModuleData oleanPath
   if mode == "find-sorry-theorems" then
     for ci in modData.constants do
-      match ci with
-      | .thmInfo val =>
+      if let .thmInfo val := ci then
         if val.value.getUsedConstants.contains `sorryAx then
           IO.println val.name.toString
-      | _ => pure ()
   else if mode == "find-sorry-defs" then
     for ci in modData.constants do
-      match ci with
-      | .defnInfo val =>
+      if let .defnInfo val := ci then
         if val.value.getUsedConstants.contains `sorryAx then
           IO.println val.name.toString
-      | .opaqueInfo val =>
-        if val.value.getUsedConstants.contains `sorryAx then
-          IO.println val.name.toString
-      | _ => pure ()
   else if mode == "list-decls" then
     for ci in modData.constants do
       IO.println ci.name.toString
   else
-    throw <| .userError s!"Unknown mode: {mode}"
+    throw <| .userError s!"Unknown query mode: {mode}"

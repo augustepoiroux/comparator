@@ -21,6 +21,7 @@ structure Context where
   gitLocation : System.FilePath
   enableNanoda : Bool
   allowDisproofs : Bool
+  autoDiscover : Bool
   whichLandrun : String
   whichLean4Export : String
   whichNanoda : String
@@ -67,6 +68,9 @@ def getNanodaEnabled : M Bool := do return (← read).enableNanoda
 
 @[inline]
 def getAllowDisproofs : M Bool := do return (← read).allowDisproofs
+
+@[inline]
+def getAutoDiscover : M Bool := do return (← read).autoDiscover
 
 def queryGitLocation : IO System.FilePath := do
   let out ← IO.Process.run {
@@ -181,7 +185,10 @@ def runQueryDecls (mode : String) (module : Lean.Name) : M (Array Lean.Name) := 
   let projectDir ← getProjectDir
   let oleanPath := nameToOleanPath projectDir module
   let queryDeclsPath := (← IO.appPath).parent.getD "" / "query_decls"
-  let whichQueryDecls ← try pure (← IO.FS.realPath queryDeclsPath).toString catch _ => pure "query_decls"
+  let whichQueryDecls ←
+    match ← IO.getEnv "COMPARATOR_QUERY_DECLS" with
+    | some path => pure path
+    | none => try pure (← IO.FS.realPath queryDeclsPath).toString catch _ => pure "query_decls"
 
   let stdout ← runSandBoxedWithStdout {
     cmd := whichQueryDecls,
@@ -404,16 +411,17 @@ def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name)
 
   return (if accepted then some actualName else none, ⟨some targetInfo, some solutionInfo, "theorem", theoremOrigin, some mode, some actualName, accepted, fail⟩)
 
-def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) : M VerificationOutcome := do
+def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name)
+    (definitionOrigin : String) : M VerificationOutcome := do
   let legalAxioms ← getLegalAxioms
   let targetInfo := getInfo challenge d |>.getD ⟨.axiomInfo ⟨⟨d, [], .sort .zero⟩, false⟩, #[]⟩
   let some sInfo := getInfo solution d
-    | return ⟨some targetInfo, none, "definition", "configured", none, some d, false, some .notFound⟩
+    | return ⟨some targetInfo, none, "definition", definitionOrigin, none, some d, false, some .notFound⟩
 
   let tKind := constKind targetInfo.constInfo
   let sKind := constKind sInfo.constInfo
   if tKind != sKind then
-    return ⟨some targetInfo, some sInfo, "definition", "configured", none, some d, false, some (.kind tKind sKind)⟩
+    return ⟨some targetInfo, some sInfo, "definition", definitionOrigin, none, some d, false, some (.kind tKind sKind)⟩
 
   let (accepted, fail) ←
     match ← Comparator.compareAt challenge solution #[] #[d] #[] with
@@ -425,7 +433,7 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) :
       | .error e => IO.println s!"Axiom check failed for definition {d}: {e}"; pure (false, some .axioms)
       | .ok () => pure (true, none)
 
-  return ⟨some targetInfo, some sInfo, "definition", "configured", none, some d, accepted, fail⟩
+  return ⟨some targetInfo, some sInfo, "definition", definitionOrigin, none, some d, accepted, fail⟩
 
 def directTarget (n : Lean.Name) : TheoremTarget :=
   { challengeName := n, solutionName := n, mode := .direct }
@@ -451,18 +459,18 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
   let mut theoremFailures := #[]
   let mut definitionFailures := #[]
 
-  let discoveredMode ← (·.isEmpty) <$> getTheoremNames
-  let theoremOrigin := if discoveredMode then "discovered" else "configured"
+  let autoDiscover ← getAutoDiscover
+  let targetOrigin := if autoDiscover then "discovered" else "configured"
 
   for t in theoremNames do
-    let (accepted, outcome) ← verifyTheorem challenge solution t theoremOrigin
+    let (accepted, outcome) ← verifyTheorem challenge solution t targetOrigin
     outcomes := outcomes.push (t, outcome)
     match accepted with
     | some actual => acceptedTheorems := acceptedTheorems.push actual
     | none => theoremFailures := theoremFailures.push (t, outcome)
 
   for d in definitionNames do
-    let outcome ← verifyDefinition challenge solution d
+    let outcome ← verifyDefinition challenge solution d targetOrigin
     outcomes := outcomes.push (d, outcome)
     if outcome.failureMode.isSome then
       definitionFailures := definitionFailures.push (d, outcome)
@@ -499,11 +507,11 @@ def compareIt : M Unit := do
 
   let configTheoremNames ← getTheoremNames
   let configDefinitionNames ← getDefinitionNames
-  let discoveredMode := configTheoremNames.isEmpty
+  let autoDiscover ← getAutoDiscover
   let allowDisproofs ← getAllowDisproofs
 
   let (theoremNames, definitionNames) ←
-    if discoveredMode then
+    if autoDiscover then
       let thms ← runQueryDecls "find-sorry-theorems" challengeModule
       let defs ← runQueryDecls "find-sorry-defs" challengeModule
       pure (thms, defs)
@@ -561,6 +569,7 @@ def M.run (x : M α) (cfg : Config) : IO α := do
     gitLocation := gitLocation,
     enableNanoda := cfg.enable_nanoda,
     allowDisproofs := cfg.allow_disproofs.getD false,
+    autoDiscover := cfg.theorem_names.isNone && cfg.definition_names.isNone,
     whichLean4Export,
     whichLandrun,
     whichNanoda,

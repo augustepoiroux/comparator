@@ -1,6 +1,6 @@
 /-
   CHALLENGE: False Two-Universe Isomorphism Target Spec
-  Tests valid disproofs under a target that strictly depends on and uses 
+  Tests valid disproofs under a target that strictly depends on and uses
   both independent universe level parameters u and v:
   ∀ {α : Type u} {β : Type v} (x : α) (y : β), Nonempty (Equiv α β)
 -/
