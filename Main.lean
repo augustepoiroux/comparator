@@ -177,11 +177,27 @@ def nameToOleanPath (projectDir : System.FilePath) (name : Lean.Name) : System.F
   let components := name.components.map (·.toString (escape := false))
   components.foldl (· / ·) (projectDir / ".lake" / "build" / "lib" / "lean") |>.withExtension "olean"
 
-def filterExportTargets (module : Lean.Name) (decls : Array Lean.Name) : M (Array Lean.Name) := do
+def runQueryDecls (mode : String) (module : Lean.Name) : M (Array Lean.Name) := do
   let projectDir ← getProjectDir
   let oleanPath := nameToOleanPath projectDir module
-  let (modData, _) ← Lean.readModuleData oleanPath
-  let localConsts := Std.HashSet.ofArray (modData.constants.map (·.name))
+  let queryDeclsPath := (← IO.appPath).parent.getD "" / "query_decls"
+  let whichQueryDecls ← try pure (← IO.FS.realPath queryDeclsPath).toString catch _ => pure "query_decls"
+
+  let stdout ← runSandBoxedWithStdout {
+    cmd := whichQueryDecls,
+    args := #[mode, oleanPath.toString],
+    envPass := #["PATH", "HOME", "LEAN_PATH", "LEAN_ABORT_ON_PANIC"]
+    envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
+    readablePaths := #[projectDir, projectDir / ".lake", whichQueryDecls]
+    writablePaths := #[]
+    executablePaths := #[whichQueryDecls]
+  }
+
+  return (stdout.splitOn "\n" |>.filter (!·.isEmpty) |>.map String.toName).toArray
+
+def filterExportTargets (module : Lean.Name) (decls : Array Lean.Name) : M (Array Lean.Name) := do
+  let localDecls ← runQueryDecls "list-decls" module
+  let localConsts := Std.HashSet.ofArray localDecls
   let coreConsts := Std.HashSet.ofArray ((← primitiveTargets) ++ (← builtinTargets) ++ (← getLegalAxioms))
   return decls.filter fun t => coreConsts.contains t || localConsts.contains t
 
@@ -488,10 +504,7 @@ def compareIt : M Unit := do
 
   let theoremNames ←
     if discoveredMode then
-      let (modData, _) ← Lean.readModuleData (nameToOleanPath (← getProjectDir) challengeModule)
-      pure <| modData.constants.filterMap fun
-        | .thmInfo val => if val.value.getUsedConstants.contains `sorryAx then some val.name else none
-        | _ => none
+      runQueryDecls "find-sorries" challengeModule
     else
       pure configTheoremNames
 

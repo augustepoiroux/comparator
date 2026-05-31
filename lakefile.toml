@@ -9,6 +9,10 @@ name = "Comparator"
 name = "comparator"
 root = "Main"
 
+[[lean_exe]]
+name = "query_decls"
+root = "scripts.QueryDecls"
+
 [[require]]
 scope = "leanprover"
 name = "Lean4Checker"
