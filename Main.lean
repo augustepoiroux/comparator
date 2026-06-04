@@ -352,28 +352,11 @@ partial def collectDeps (env : Export.ExportedEnv) (n : Lean.Name) : DepM Unit :
     return
   modify (·.insert n)
   if let some info := env.constMap[n]? then
-    info.type.getUsedConstants.forM (collectDeps env)
-    if let some val := info.value? (allowOpaque := true) then
-      val.getUsedConstants.forM (collectDeps env)
-    match info with
-    | .axiomInfo .. | .quotInfo .. | .defnInfo .. | .thmInfo .. | .opaqueInfo .. => pure ()
-    | .inductInfo info =>
-      info.ctors.forM (collectDeps env)
-      info.all.forM (collectDeps env)
-    | .ctorInfo info =>
-      collectDeps env info.induct
-    | .recInfo info =>
-      info.rules.forM fun rule => do
-        collectDeps env rule.ctor
-        rule.rhs.getUsedConstants.forM (collectDeps env)
+    runForUsedConsts info (collectDeps env)
 
-partial def getAxioms (env : Export.ExportedEnv) (n : Lean.Name) : Array Lean.Name := Id.run do
+def getAxioms (env : Export.ExportedEnv) (n : Lean.Name) : Array Lean.Name :=
   let (_, deps) := (collectDeps env n).run {}
-  let mut axioms := #[]
-  for dep in deps do
-    if let some (.axiomInfo _) := env.constMap[dep]? then
-      axioms := axioms.push dep
-  return axioms
+  deps.toArray.filter fun dep => match env.constMap[dep]? with | some (.axiomInfo _) => true | _ => false
 
 def getInfo (env : Export.ExportedEnv) (n : Lean.Name) : Option Info := do
   some ⟨← env.constMap[n]?, getAxioms env n⟩
