@@ -143,6 +143,56 @@ def safeLakeBuild (target : Lean.Name) : M Unit := do
     executablePaths := #[leanPrefix, gitLocation]
   }
 
+def runNanoda (solutionExport : String) : M Unit := do
+  IO.println "Running nanoda kernel on solution"
+  IO.FS.withTempFile fun config configPath => do
+    let legalAxioms ← getLegalAxioms
+    config.putStr <| Lean.Json.compress <| Lean.Json.mkObj [
+      ("use_stdin", true),
+      ("permitted_axioms", .arr <| legalAxioms.map (.str ∘ Lean.Name.toString)),
+      ("unpermitted_axiom_hard_error", true),
+      ("nat_extension", true),
+      ("string_extension", true),
+    ]
+    config.flush
+
+    let spawnArgs := {
+      cmd := (← read).whichNanoda
+      args := #[configPath.toString],
+      envPass := #[]
+      readablePaths := #[configPath.toString]
+      writablePaths := #[]
+      executablePaths := #[]
+    }
+
+    let args := buildLandrunArgs spawnArgs
+    let proc ← IO.Process.spawn {
+      cmd := (← read).whichLandrun,
+      args,
+      stdin := .piped
+      env := spawnArgs.envOverride
+      cwd := (← getProjectDir)
+    }
+
+    let (nanodaStdin, proc) ← proc.takeStdin
+    nanodaStdin.putStr solutionExport
+    nanodaStdin.flush
+    let ret ← proc.wait
+    if ret != 0 then
+      throw <| .userError s!"Child exited with {ret}"
+
+    IO.println "Nanoda kernel accepts the solution"
+
+def runKernel (solution : Export.ExportedEnv) : M Unit := do
+  IO.println "Running Lean default kernel on solution."
+  let mut env ← Lean.mkEmptyEnvironment
+  let mut constMap := solution.constMap
+  -- Lean's kernel interprets just the addition of `Quot as adding all of these so adding them
+  -- multiple times leads to errors.
+  constMap := constMap.erase `Quot.mk |>.erase `Quot.lift |>.erase `Quot.ind
+  discard <| env.replay' constMap
+  IO.println "Lean default kernel accepts the solution"
+
 def primitiveTargets : M (Array Lean.Name) := do
   -- The challenge needs to have all the built-in constants of the kernel, as the
   -- kernel makes no guarantees when fed other definitions here.
@@ -232,56 +282,6 @@ def safeExport (module : Lean.Name) (decls : Array Lean.Name) : M String := do
     executablePaths := #[leanPrefix]
   }
 
-def runNanoda (solutionExport : String) : M Unit := do
-  IO.println "Running nanoda kernel on solution"
-  IO.FS.withTempFile fun config configPath => do
-    let legalAxioms ← getLegalAxioms
-    config.putStr <| Lean.Json.compress <| Lean.Json.mkObj [
-      ("use_stdin", true),
-      ("permitted_axioms", .arr <| legalAxioms.map (.str ∘ Lean.Name.toString)),
-      ("unpermitted_axiom_hard_error", true),
-      ("nat_extension", true),
-      ("string_extension", true),
-    ]
-    config.flush
-
-    let spawnArgs := {
-      cmd := (← read).whichNanoda
-      args := #[configPath.toString],
-      envPass := #[]
-      readablePaths := #[configPath.toString]
-      writablePaths := #[]
-      executablePaths := #[]
-    }
-
-    let args := buildLandrunArgs spawnArgs
-    let proc ← IO.Process.spawn {
-      cmd := (← read).whichLandrun,
-      args,
-      stdin := .piped
-      env := spawnArgs.envOverride
-      cwd := (← getProjectDir)
-    }
-
-    let (nanodaStdin, proc) ← proc.takeStdin
-    nanodaStdin.putStr solutionExport
-    nanodaStdin.flush
-    let ret ← proc.wait
-    if ret != 0 then
-      throw <| .userError s!"Child exited with {ret}"
-
-    IO.println "Nanoda kernel accepts the solution"
-
-def runKernel (solution : Export.ExportedEnv) : M Unit := do
-  IO.println "Running Lean default kernel on solution."
-  let mut env ← Lean.mkEmptyEnvironment
-  let mut constMap := solution.constMap
-  -- Lean's kernel interprets just the addition of `Quot as adding all of these so adding them
-  -- multiple times leads to errors.
-  constMap := constMap.erase `Quot.mk |>.erase `Quot.lift |>.erase `Quot.ind
-  discard <| env.replay' constMap
-  IO.println "Lean default kernel accepts the solution"
-
 
 def stringStream (s : String) : BaseIO IO.FS.Stream := do
   let ref ← IO.mkRef {
@@ -307,6 +307,11 @@ def constKind : Lean.ConstantInfo → String
 
 instance : Lean.ToJson Lean.ConstantInfo where
   toJson ci := Lean.Json.mkObj [("kind", constKind ci)]
+
+inductive TheoremMode where
+  | direct
+  | disproof
+  deriving BEq, Inhabited, Lean.ToJson, Repr
 
 -- JSON schemas matching SafeVerify
 inductive CheckFailure where
@@ -369,12 +374,12 @@ def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.
   let sInfo := (getInfo solution solutionName).get!
   let (_, deps) := (collectDeps solution solutionName).run {}
   let defsToCompare := definitionNames.filter deps.contains
-  let target := { challengeName := t, solutionName := solutionName, mode := mode }
 
   let typeFailureMode := match mode with | .direct => .thmType | .disproof => .disproofType
+  let allowDisproofs := match mode with | .direct => false | .disproof => true
 
   let (accepted, fail) ←
-    match ← Comparator.compareAt challenge solution #[target] defsToCompare #[] with
+    match Comparator.compareAt challenge solution #[t] defsToCompare #[] allowDisproofs with
     | .error e =>
       IO.println s!"Verification failed for {solutionName}: {e}"
       pure (false, some typeFailureMode)
@@ -427,7 +432,7 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name)
     return ⟨some targetInfo, some sInfo, "definition", definitionOrigin, none, some d, false, some (.kind tKind sKind)⟩
 
   let (accepted, fail) ←
-    match ← Comparator.compareAt challenge solution #[] #[d] #[] with
+    match Comparator.compareAt challenge solution #[] #[d] #[] with
     | .error e =>
       IO.println s!"Definition check failed for {d}: {e}"
       pure (false, some .defnCheck)
@@ -437,9 +442,6 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name)
       | .ok () => pure (true, none)
 
   return ⟨some targetInfo, some sInfo, "definition", definitionOrigin, none, some d, accepted, fail⟩
-
-def directTarget (n : Lean.Name) : TheoremTarget :=
-  { challengeName := n, solutionName := n, mode := .direct }
 
 def throwFailures (header : String) (failures : Array (Lean.Name × VerificationOutcome)) : M α := do
   let mut msg := header
@@ -455,7 +457,7 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
   let legalAxioms ← getLegalAxioms
   let mustResolveAllSorries ← getMustResolveAllSorries
 
-  IO.ofExcept <| ← Comparator.compareAt challenge solution (legalAxioms.map directTarget) #[] primTargets
+  IO.ofExcept <| Comparator.compareAt challenge solution legalAxioms #[] primTargets
 
   let mut outcomes : Array (Lean.Name × VerificationOutcome) := #[]
   let mut acceptedTheorems := #[]
