@@ -1,8 +1,34 @@
 {
-	"exit_code": 0,
-	"expected_output": [
-		"Running Lean default kernel on solution",
-		"Lean default kernel accepts the solution",
-		"Your solution is okay!"
-	]
+    "exit_code": 0,
+    "expected_output": [
+        "Running Lean default kernel on solution",
+        "Lean default kernel accepts the solution",
+        "Your solution is okay!"
+    ],
+    "expected_json_output": [
+        [
+            "comm",
+            {
+                "targetInfo": {
+                    "constInfo": {
+                        "kind": "theorem"
+                    },
+                    "axioms": [
+                        "sorryAx"
+                    ]
+                },
+                "solutionInfo": {
+                    "constInfo": {
+                        "kind": "theorem"
+                    },
+                    "axioms": [
+                        "Quot.sound",
+                        "Classical.choice",
+                        "propext"
+                    ]
+                },
+                "failureMode": null
+            }
+        ]
+    ]
 }

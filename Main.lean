@@ -313,18 +313,13 @@ inductive TheoremMode where
   | disproof
   deriving BEq, Inhabited, Lean.ToJson, Repr
 
--- JSON schemas matching SafeVerify
 inductive CheckFailure where
   | kind (kind1 kind2 : String)
   | thmType
   | disproofType
   | defnCheck
-  | opaqueCheck
-  | inductCheck
-  | ctorCheck
   | axioms
   | notFound
-  | ambiguous
   deriving Lean.ToJson, Inhabited, Repr
 
 structure Info where
@@ -333,19 +328,9 @@ structure Info where
   deriving Lean.ToJson, Inhabited
 
 structure VerificationOutcome where
-  targetInfo : Option Info
+  targetInfo : Info
   solutionInfo : Option Info
-  targetKind : String
-  origin : String
-  mode : Option TheoremMode
-  actualName : Option Lean.Name
-  accepted : Bool
   failureMode : Option CheckFailure
-  deriving Lean.ToJson, Inhabited
-
-structure VerifyResult where
-  acceptedTheorems : Array Lean.Name
-  outcomes : Array (Lean.Name × VerificationOutcome)
   deriving Lean.ToJson, Inhabited
 
 def disproofName (n : Lean.Name) : Lean.Name := n ++ `disproof
@@ -367,7 +352,7 @@ def getInfo (env : Export.ExportedEnv) (n : Lean.Name) : Option Info := do
   some ⟨← env.constMap[n]?, getAxioms env n⟩
 
 def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.Name)
-    (solutionName : Lean.Name) (mode : TheoremMode) (theoremOrigin : String) (targetInfo : Info) :
+    (solutionName : Lean.Name) (mode : TheoremMode) (targetInfo : Info) :
     M (Bool × VerificationOutcome) := do
   let legalAxioms ← getLegalAxioms
   let definitionNames ← getDefinitionNames
@@ -375,11 +360,10 @@ def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.
   let (_, deps) := (collectDeps solution solutionName).run {}
   let defsToCompare := definitionNames.filter deps.contains
 
-  let typeFailureMode := match mode with | .direct => .thmType | .disproof => .disproofType
-  let allowDisproofs := match mode with | .direct => false | .disproof => true
+  let typeFailureMode : CheckFailure := match mode with | .direct => .thmType | .disproof => .disproofType
 
   let (accepted, fail) ←
-    match Comparator.compareAt challenge solution #[t] defsToCompare #[] allowDisproofs with
+    match Comparator.compareAt challenge solution #[t] defsToCompare #[] (mode == .disproof) with
     | .error e =>
       IO.println s!"Verification failed for {solutionName}: {e}"
       pure (false, some typeFailureMode)
@@ -388,11 +372,11 @@ def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.
       | .error e => IO.println s!"Axiom check failed for {solutionName}: {e}"; pure (false, some .axioms)
       | .ok () => pure (true, none)
 
-  let outcome := ⟨some targetInfo, some sInfo, "theorem", theoremOrigin, some mode, some solutionName, accepted, fail⟩
+  let outcome := ⟨targetInfo, some sInfo, fail⟩
   return (accepted, outcome)
 
-def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name)
-    (theoremOrigin : String) : M (Array Lean.Name × Array (Lean.Name × VerificationOutcome)) := do
+def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name) :
+    M (Array Lean.Name × Array (Lean.Name × VerificationOutcome)) := do
   let allowDisproofs ← getAllowDisproofs
   let targetInfo := getInfo challenge t |>.getD ⟨.axiomInfo ⟨⟨t, [], .sort .zero⟩, false⟩, #[]⟩
   let directInfo := solution.constMap[t]?
@@ -403,45 +387,45 @@ def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name)
   let mut outcomes := #[]
 
   if let some _ := directInfo then
-    let (accepted, outcome) ← verifyOneTheoremAttempt challenge solution t t .direct theoremOrigin targetInfo
+    let (accepted, outcome) ← verifyOneTheoremAttempt challenge solution t t .direct targetInfo
     if accepted then
       acceptedNames := acceptedNames.push t
     outcomes := outcomes.push (t, outcome)
 
   if let some _ := disproofInfo then
-    let (accepted, outcome) ← verifyOneTheoremAttempt challenge solution t dname .disproof theoremOrigin targetInfo
+    let (accepted, outcome) ← verifyOneTheoremAttempt challenge solution t dname .disproof targetInfo
     if accepted then
       acceptedNames := acceptedNames.push dname
     outcomes := outcomes.push (t, outcome)
 
   if directInfo.isNone && disproofInfo.isNone then
-    outcomes := outcomes.push (t, ⟨some targetInfo, none, "theorem", theoremOrigin, none, none, false, some .notFound⟩)
+    outcomes := outcomes.push (t, ⟨targetInfo, none, some .notFound⟩)
 
   return (acceptedNames, outcomes)
 
-def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name)
-    (definitionOrigin : String) : M VerificationOutcome := do
+def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) :
+    M VerificationOutcome := do
   let legalAxioms ← getLegalAxioms
   let targetInfo := getInfo challenge d |>.getD ⟨.axiomInfo ⟨⟨d, [], .sort .zero⟩, false⟩, #[]⟩
   let some sInfo := getInfo solution d
-    | return ⟨some targetInfo, none, "definition", definitionOrigin, none, some d, false, some .notFound⟩
+    | return ⟨targetInfo, none, some .notFound⟩
 
   let tKind := constKind targetInfo.constInfo
   let sKind := constKind sInfo.constInfo
   if tKind != sKind then
-    return ⟨some targetInfo, some sInfo, "definition", definitionOrigin, none, some d, false, some (.kind tKind sKind)⟩
+    return ⟨targetInfo, some sInfo, some (.kind tKind sKind)⟩
 
-  let (accepted, fail) ←
+  let fail ←
     match Comparator.compareAt challenge solution #[] #[d] #[] with
     | .error e =>
       IO.println s!"Definition check failed for {d}: {e}"
-      pure (false, some .defnCheck)
+      pure <| some .defnCheck
     | .ok () =>
       match Comparator.checkAxioms solution #[] #[d] legalAxioms with
-      | .error e => IO.println s!"Axiom check failed for definition {d}: {e}"; pure (false, some .axioms)
-      | .ok () => pure (true, none)
+      | .error e => IO.println s!"Axiom check failed for definition {d}: {e}"; pure <| some .axioms
+      | .ok () => pure none
 
-  return ⟨some targetInfo, some sInfo, "definition", definitionOrigin, none, some d, accepted, fail⟩
+  return ⟨targetInfo, some sInfo, fail⟩
 
 def throwFailures (header : String) (failures : Array (Lean.Name × VerificationOutcome)) : M α := do
   let mut msg := header
@@ -450,7 +434,7 @@ def throwFailures (header : String) (failures : Array (Lean.Name × Verification
   throw <| .userError msg
 
 def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNames : Array Lean.Name)
-    (definitionNames : Array Lean.Name) (allowPartialTheoremFailures : Bool) : M VerifyResult := do
+    (definitionNames : Array Lean.Name) (allowPartialTheoremFailures : Bool) : M (Array Lean.Name) := do
   let challenge ← Export.parseStream (← stringStream challengeExport)
   let solution ← Export.parseStream (← stringStream solutionExport)
   let primTargets ← primitiveTargets
@@ -464,11 +448,8 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
   let mut theoremFailures := #[]
   let mut definitionFailures := #[]
 
-  let autoDiscover ← getAutoDiscover
-  let targetOrigin := if autoDiscover then "discovered" else "configured"
-
   for t in theoremNames do
-    let (acceptedActualNames, theoremOutcomes) ← verifyTheorem challenge solution t targetOrigin
+    let (acceptedActualNames, theoremOutcomes) ← verifyTheorem challenge solution t
     outcomes := outcomes ++ theoremOutcomes
     for actual in acceptedActualNames do
       acceptedTheorems := acceptedTheorems.push actual
@@ -477,15 +458,13 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
         theoremFailures := theoremFailures.push (t, outcome)
 
   for d in definitionNames do
-    let outcome ← verifyDefinition challenge solution d targetOrigin
+    let outcome ← verifyDefinition challenge solution d
     outcomes := outcomes.push (d, outcome)
     if outcome.failureMode.isSome then
       definitionFailures := definitionFailures.push (d, outcome)
 
-  let result : VerifyResult := { acceptedTheorems := acceptedTheorems, outcomes := outcomes }
-
   if let some jsonPath ← getJsonOutputPath then
-    let jsonOutput := Lean.ToJson.toJson result
+    let jsonOutput := Lean.ToJson.toJson outcomes
     IO.FS.writeFile jsonPath (Lean.Json.compress jsonOutput)
 
   if !definitionFailures.isEmpty then
@@ -502,7 +481,7 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
       for (t, outcome) in theoremFailures do
         IO.println s!"WARNING: Theorem '{t}' remained unsolved: {outcome.failureMode.map repr}"
 
-  return result
+  return acceptedTheorems
 
 
 def getTargets (theorems : Array Lean.Name) (definitions : Array Lean.Name) : M (Array Lean.Name) := do
@@ -537,9 +516,9 @@ def compareIt : M Unit := do
   let solutionExport ← safeExport solutionModule initialSolutionExportTargets
 
   let allowPartialTheoremFailures := !(← getMustResolveAllSorries)
-  let result ← verifyMatch challengeExport solutionExport theoremNames definitionNames allowPartialTheoremFailures
+  let acceptedTheorems ← verifyMatch challengeExport solutionExport theoremNames definitionNames allowPartialTheoremFailures
 
-  let verifiedSolutionExport ← safeExport solutionModule (← getTargets result.acceptedTheorems definitionNames)
+  let verifiedSolutionExport ← safeExport solutionModule (← getTargets acceptedTheorems definitionNames)
 
   if ← getNanodaEnabled then
     runNanoda verifiedSolutionExport
@@ -590,7 +569,6 @@ def M.run (x : M α) (cfg : Config) : IO α := do
 end Comparator
 
 def main (args : List String) : IO Unit := do
-  Lean.initSearchPath (← Lean.findSysroot)
   let some (configPath : String) := args[0]?
     | throw <| .userError "Expected config file path as first argument."
   let content ← IO.FS.readFile configPath
