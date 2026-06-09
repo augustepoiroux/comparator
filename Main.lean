@@ -352,10 +352,9 @@ def getInfo (env : Export.ExportedEnv) (n : Lean.Name) : Option Info := do
   some ⟨← env.constMap[n]?, getAxioms env n⟩
 
 def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.Name)
-    (solutionName : Lean.Name) (mode : TheoremMode) (targetInfo : Info) :
+    (solutionName : Lean.Name) (mode : TheoremMode) (targetInfo : Info) (definitionNames : Array Lean.Name) :
     M (Bool × VerificationOutcome) := do
   let legalAxioms ← getLegalAxioms
-  let definitionNames ← getDefinitionNames
   let sInfo := (getInfo solution solutionName).get!
   let (_, deps) := (collectDeps solution solutionName).run {}
   let defsToCompare := definitionNames.filter deps.contains
@@ -375,7 +374,7 @@ def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.
   let outcome := ⟨targetInfo, some sInfo, fail⟩
   return (accepted, outcome)
 
-def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name) :
+def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name) (definitionNames : Array Lean.Name) :
     M (Array Lean.Name × Array (Lean.Name × VerificationOutcome)) := do
   let allowDisproofs ← getAllowDisproofs
   let targetInfo := getInfo challenge t |>.getD ⟨.axiomInfo ⟨⟨t, [], .sort .zero⟩, false⟩, #[]⟩
@@ -387,13 +386,13 @@ def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name) :
   let mut outcomes := #[]
 
   if let some _ := directInfo then
-    let (accepted, outcome) ← verifyOneTheoremAttempt challenge solution t t .direct targetInfo
+    let (accepted, outcome) ← verifyOneTheoremAttempt challenge solution t t .direct targetInfo definitionNames
     if accepted then
       acceptedNames := acceptedNames.push t
     outcomes := outcomes.push (t, outcome)
 
   if let some _ := disproofInfo then
-    let (accepted, outcome) ← verifyOneTheoremAttempt challenge solution t dname .disproof targetInfo
+    let (accepted, outcome) ← verifyOneTheoremAttempt challenge solution t dname .disproof targetInfo definitionNames
     if accepted then
       acceptedNames := acceptedNames.push dname
     outcomes := outcomes.push (t, outcome)
@@ -449,7 +448,7 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
   let mut definitionFailures := #[]
 
   for t in theoremNames do
-    let (acceptedActualNames, theoremOutcomes) ← verifyTheorem challenge solution t
+    let (acceptedActualNames, theoremOutcomes) ← verifyTheorem challenge solution t definitionNames
     outcomes := outcomes ++ theoremOutcomes
     for actual in acceptedActualNames do
       acceptedTheorems := acceptedTheorems.push actual
@@ -487,31 +486,50 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
 def getTargets (theorems : Array Lean.Name) (definitions : Array Lean.Name) : M (Array Lean.Name) := do
   return (← builtinTargets) ++ theorems ++ (← getLegalAxioms) ++ (← primitiveTargets) ++ definitions
 
-def compareIt : M Unit := do
+def compareIt (exportPath importPath : Option String := none) : M Unit := do
   let challengeModule ← getChallengeModule
-  safeLakeBuild challengeModule
 
-  let configTheoremNames ← getTheoremNames
-  let configDefinitionNames ← getDefinitionNames
-  let autoDiscover ← getAutoDiscover
-  let allowDisproofs ← getAllowDisproofs
+  if importPath.isNone then
+    safeLakeBuild challengeModule
 
-  let (theoremNames, definitionNames) ←
-    if autoDiscover then
-      let thms ← runQueryDecls "find-sorry-theorems" challengeModule
-      let defs ← runQueryDecls "find-sorry-defs" challengeModule
-      pure (thms, defs)
+  let (challengeExport, theoremNames, definitionNames) ← do
+    if let some path := importPath then
+      let h ← IO.FS.Handle.mk path .read
+      let thms : Array String ← IO.ofExcept (Lean.Json.parse (← h.getLine) >>= Lean.FromJson.fromJson?)
+      let defs : Array String ← IO.ofExcept (Lean.Json.parse (← h.getLine) >>= Lean.FromJson.fromJson?)
+      let exp ← h.readToEnd
+      pure (exp, thms.map String.toName, defs.map String.toName)
     else
-      pure (configTheoremNames, configDefinitionNames)
+      let configTheoremNames ← getTheoremNames
+      let configDefinitionNames ← getDefinitionNames
+      let autoDiscover ← getAutoDiscover
 
-  if theoremNames.isEmpty && definitionNames.isEmpty then
-    throw <| .userError "No verification targets selected or found."
+      let (theoremNames, definitionNames) ←
+        if autoDiscover then
+          let thms ← runQueryDecls "find-sorry-theorems" challengeModule
+          let defs ← runQueryDecls "find-sorry-defs" challengeModule
+          pure (thms, defs)
+        else
+          pure (configTheoremNames, configDefinitionNames)
 
-  let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames)
+      if theoremNames.isEmpty && definitionNames.isEmpty then
+        throw <| .userError "No verification targets selected or found."
+
+      let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames)
+      pure (challengeExport, theoremNames, definitionNames)
+
+  if let some path := exportPath then
+    let h ← IO.FS.Handle.mk path .write
+    h.putStrLn <| Lean.Json.compress <| Lean.ToJson.toJson (theoremNames.map (·.toString))
+    h.putStrLn <| Lean.Json.compress <| Lean.ToJson.toJson (definitionNames.map (·.toString))
+    h.putStr challengeExport
+    IO.println s!"Challenge snapshot pack successfully exported to {path}."
+    return
 
   let solutionModule ← getSolutionModule
   safeLakeBuild solutionModule
 
+  let allowDisproofs ← getAllowDisproofs
   let initialSolutionExportTargets := (← getTargets theoremNames definitionNames) ++ (if allowDisproofs then theoremNames.map disproofName else #[])
   let solutionExport ← safeExport solutionModule initialSolutionExportTargets
 
@@ -569,8 +587,11 @@ def M.run (x : M α) (cfg : Config) : IO α := do
 end Comparator
 
 def main (args : List String) : IO Unit := do
-  let some (configPath : String) := args[0]?
-    | throw <| .userError "Expected config file path as first argument."
+  let (exportPath, importPath, configPath) ← match args with
+    | ["--snapshot", snapshotPath, configPath] => pure (some snapshotPath, none, configPath)
+    | ["--verify", snapshotPath, configPath] => pure (none, some snapshotPath, configPath)
+    | [configPath] => pure (none, none, configPath)
+    | _ => throw <| .userError "Expected arguments: [--snapshot snapshot_path | --verify snapshot_path] config_file_path"
   let content ← IO.FS.readFile configPath
   let config ← IO.ofExcept <| Lean.FromJson.fromJson? <| ← IO.ofExcept <| Lean.Json.parse content
-  Comparator.M.run Comparator.compareIt config
+  Comparator.M.run (Comparator.compareIt exportPath importPath) config

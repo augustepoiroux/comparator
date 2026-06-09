@@ -27,6 +27,8 @@ structure TestConfig where
   exit_code : Nat
   expected_output : Option (Array String) := none
   expected_json_output : Option Lean.Json := none
+  two_phase_cli_snapshot : Option String := none
+  simulate_agent_edit : Option (String × String) := none
   deriving FromJson, ToJson
 
 inductive TestResult
@@ -117,7 +119,17 @@ def runTestProject (projectPath : FilePath) (projectName : String) (_testsDir : 
       if cacheExit != 0 then
         IO.println s!"Warning: lake exe cache get exited with {cacheExit}:\n{cacheOut}"
 
-    let (exitCode, outputTrace) ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"]
+    let (exitCode, outputTrace) ← if let some snap := config.two_phase_cli_snapshot then
+      let (exit1, out1) ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "--snapshot", snap, "config.json"]
+      if exit1 != 0 then
+        pure (exit1, out1)
+      else
+        if let some (src, dst) := config.simulate_agent_edit then
+          copyFile (tempDir / src) (tempDir / dst)
+        let (exit2, out2) ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "--verify", snap, "config.json"]
+        pure (exit2, out1 ++ "\n" ++ out2)
+    else
+      runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "config.json"]
 
     -- If expected_output substrings are specified, verify they exist in the trace
     if let some expectedSubstrings := config.expected_output then

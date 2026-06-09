@@ -1,0 +1,1 @@
+def HardConjecture : Prop := True

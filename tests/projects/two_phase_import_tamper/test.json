@@ -1,0 +1,6 @@
+{
+    "exit_code": 1,
+    "two_phase_cli_snapshot": "snapshot.pack",
+    "simulate_agent_edit": ["Common.agent.lean", "Common.lean"],
+    "expected_output": ["Const does not match between challenge and target 'HardConjecture'"]
+}

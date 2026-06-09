@@ -82,6 +82,21 @@ Furthermore, it is possible to avoid trusting `landrun`'s ability to sandbox the
 if you have obtained a fully pre-built `.lake` directory through other means and without compromising your
 checking environment, `Solution.lean` will not be rebuilt.
 
+## Two-Phase Clean-Room Verification
+To fully protect trusted challenge specifications from adversarial filesystem modifications or tampering by untrusted agents, comparator supports a two-phase clean-room execution workflow using a single pack file (`.pack`).
+
+1. **Phase 1 (Pre-Run Snapshot):** Before running the untrusted agent, compile and snapshot the challenge environment inside a trusted clean container:
+   ```sh
+   comparator --snapshot snapshot.pack path/to/config.json
+   ```
+   This captures the autodiscovered target names and trusted kernel export stream into a single compact plain-text archive.
+
+2. **Phase 2 (Post-Run Verification):** After the agent has finished executing and generated `Solution.lean`, run verification against the trusted snapshot:
+   ```sh
+   comparator --verify snapshot.pack path/to/config.json
+   ```
+   Comparator will directly ingest the trusted `snapshot.pack` and skip compiling or querying `Challenge.olean`. This completely neutralizes any attempts by the agent to tamper with imported dependencies or redefine challenge targets.
+
 ## Checking with Additional Kernels
 Comparator currently supports checking with the [nanoda](https://github.com/ammkrn/nanoda_lib)
 kernel in addition to the builtin Lean one. To do this you need to set the `enable_nanoda` flag in
