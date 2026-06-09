@@ -84,7 +84,11 @@ partial def loop : CompareM Unit := do
     if (← read).definitionTargets.contains solutionConst.name then
       solutionConst.type.getUsedConstants.forM addWorklist
     else
-      if challengeConst != solutionConst then
+      let matchOk :=
+        match challengeConst, solutionConst with
+        | .thmInfo cc, .thmInfo sc => cc.toConstantVal == sc.toConstantVal
+        | _, _ => challengeConst == solutionConst
+      unless matchOk do
         throw s!"Const does not match between challenge and target '{target}'"
       addRelevantConsts solutionConst
 
