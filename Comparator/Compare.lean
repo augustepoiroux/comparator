@@ -90,7 +90,9 @@ partial def loop : CompareM Unit := do
         | _, _ => challengeConst == solutionConst
       unless matchOk do
         throw s!"Const does not match between challenge and target '{target}'"
-      addRelevantConsts solutionConst
+      match solutionConst with
+      | .thmInfo cc => cc.type.getUsedConstants.forM addWorklist
+      | _ => addRelevantConsts solutionConst
 
     modify fun s => { s with checked := s.checked.insert target }
     loop
