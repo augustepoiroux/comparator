@@ -16,9 +16,9 @@ root = "scripts.QueryDecls"
 [[require]]
 scope = "leanprover"
 name = "Lean4Checker"
-rev = "b7398199245524275543dec6113229c9bb4902e5"
+rev = "66e11cea12f5ba215d76b15b7f8495141bf52c6c"
 
 [[require]]
 scope = "leanprover"
 name = "lean4export"
-rev = "v4.27.0"
+rev = "v4.28.0"
