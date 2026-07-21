@@ -4,5 +4,6 @@
     "theorem_names": ["foo", "bar"],
     "permitted_axioms": ["propext", "Quot.sound", "Classical.choice"],
     "enable_nanoda": false,
-    "allow_disproofs": true
+    "allow_disproofs": true,
+    "json_output_path": "report.json"
 }

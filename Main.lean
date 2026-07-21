@@ -331,6 +331,8 @@ structure VerificationOutcome where
   targetInfo : Info
   solutionInfo : Option Info
   failureMode : Option CheckFailure
+  mode : Option TheoremMode := none
+  solutionName : Option Lean.Name := none
   deriving Lean.ToJson, Inhabited
 
 def disproofName (n : Lean.Name) : Lean.Name := n ++ `disproof
@@ -371,7 +373,7 @@ def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.
       | .error e => IO.println s!"Axiom check failed for {solutionName}: {e}"; pure (false, some .axioms)
       | .ok () => pure (true, none)
 
-  let outcome := ⟨targetInfo, some sInfo, fail⟩
+  let outcome := ⟨targetInfo, some sInfo, fail, some mode, some solutionName⟩
   return (accepted, outcome)
 
 def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name) (definitionNames : Array Lean.Name) :
@@ -398,7 +400,7 @@ def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name) (def
     outcomes := outcomes.push (t, outcome)
 
   if directInfo.isNone && disproofInfo.isNone then
-    outcomes := outcomes.push (t, ⟨targetInfo, none, some .notFound⟩)
+    outcomes := outcomes.push (t, ⟨targetInfo, none, some .notFound, none, none⟩)
 
   return (acceptedNames, outcomes)
 
@@ -407,12 +409,12 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) :
   let legalAxioms ← getLegalAxioms
   let targetInfo := getInfo challenge d |>.getD ⟨.axiomInfo ⟨⟨d, [], .sort .zero⟩, false⟩, #[]⟩
   let some sInfo := getInfo solution d
-    | return ⟨targetInfo, none, some .notFound⟩
+    | return ⟨targetInfo, none, some .notFound, none, none⟩
 
   let tKind := constKind targetInfo.constInfo
   let sKind := constKind sInfo.constInfo
   if tKind != sKind then
-    return ⟨targetInfo, some sInfo, some (.kind tKind sKind)⟩
+    return ⟨targetInfo, some sInfo, some (.kind tKind sKind), none, some d⟩
 
   let fail ←
     match Comparator.compareAt challenge solution #[] #[d] #[] with
@@ -424,7 +426,7 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) :
       | .error e => IO.println s!"Axiom check failed for definition {d}: {e}"; pure <| some .axioms
       | .ok () => pure none
 
-  return ⟨targetInfo, some sInfo, fail⟩
+  return ⟨targetInfo, some sInfo, fail, none, some d⟩
 
 def throwFailures (header : String) (failures : Array (Lean.Name × VerificationOutcome)) : M α := do
   let mut msg := header

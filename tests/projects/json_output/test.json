@@ -27,7 +27,9 @@
                         "propext"
                     ]
                 },
-                "failureMode": null
+                "failureMode": null,
+                "mode": "direct",
+                "solutionName": "comm"
             }
         ]
     ]

@@ -1,3 +1,49 @@
 {
-        "exit_code": 0
+    "exit_code": 0,
+    "expected_json_output": [
+        [
+            "foo",
+            {
+                "targetInfo": {
+                    "constInfo": {
+                        "kind": "theorem"
+                    },
+                    "axioms": [
+                        "sorryAx"
+                    ]
+                },
+                "solutionInfo": {
+                    "constInfo": {
+                        "kind": "theorem"
+                    },
+                    "axioms": []
+                },
+                "failureMode": null,
+                "mode": "disproof",
+                "solutionName": "foo.disproof"
+            }
+        ],
+        [
+            "bar",
+            {
+                "targetInfo": {
+                    "constInfo": {
+                        "kind": "theorem"
+                    },
+                    "axioms": [
+                        "sorryAx"
+                    ]
+                },
+                "solutionInfo": {
+                    "constInfo": {
+                        "kind": "theorem"
+                    },
+                    "axioms": []
+                },
+                "failureMode": null,
+                "mode": "disproof",
+                "solutionName": "bar.disproof"
+            }
+        ]
+    ]
 }
