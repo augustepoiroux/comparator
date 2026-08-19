@@ -49,6 +49,7 @@ structure Context where
   challenge : Export.ExportedEnv
   solution : Export.ExportedEnv
   definitionTargets : Std.HashSet Lean.Name
+  theoremTargets : Std.HashSet Lean.Name
 
 structure State where
   worklist : Array Lean.Name
@@ -81,7 +82,8 @@ partial def loop : CompareM Unit := do
     let some solutionConst := (← read).solution.constMap[target]?
       | throw s!"Const not found in solution '{target}'"
 
-    if (← read).definitionTargets.contains solutionConst.name then
+    if (← read).definitionTargets.contains solutionConst.name
+        || (← read).theoremTargets.contains solutionConst.name then
       solutionConst.type.getUsedConstants.forM addWorklist
     else
       let matchOk :=
@@ -155,6 +157,7 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
     worklist := worklist.push solutionConst.name
 
   let definitionTargets := Std.HashSet.ofArray definitionTargets
-  Compare.loop.run { challenge, solution, definitionTargets } |>.run' { worklist, checked := {} }
+  let theoremTargets := Std.HashSet.ofArray theoremTargets
+  Compare.loop.run { challenge, solution, definitionTargets, theoremTargets } |>.run' { worklist, checked := {} }
 
 end Comparator
