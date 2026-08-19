@@ -16,4 +16,4 @@ root = "scripts.QueryDecls"
 [[require]]
 scope = "leanprover"
 name = "lean4export"
-rev = "master"
+rev = "v4.34.0-rc1"
