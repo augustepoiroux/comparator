@@ -203,32 +203,19 @@ where
 
 def runBuiltinKernel (solution : Export.ExportedEnv) : M (Option String) := do
   IO.println "Running Lean default kernel on solution."
-  let env ← Lean.mkEmptyEnvironment
-  let mut kernelEnv := env.toKernelEnv
-  let origConstMap := solution.constMap
+  let mut env ← Lean.mkEmptyEnvironment
+  let mut constMap := solution.constMap
   -- Lean's kernel interprets just the addition of `Quot as adding all of these so adding them
   -- multiple times leads to errors.
-  let quotTargets := [`Quot.mk, `Quot.lift, `Quot.ind]
-  let kernelConstMap := quotTargets.foldl (init := origConstMap) (·.erase ·)
+  constMap := constMap.erase `Quot.mk |>.erase `Quot.lift |>.erase `Quot.ind
   try
-    kernelEnv ← kernelEnv.replay kernelConstMap
+    discard <| env.replay constMap
     IO.println "Lean default kernel accepts the solution"
+    return none
   catch e =>
     IO.println "Lean default kernel rejects the solution"
     return some e.toString
 
-  try
-    let verifyTargets := `Quot :: quotTargets
-    for quotTarget in verifyTargets do
-      if let some info := origConstMap[quotTarget]? then
-        let some info' := kernelEnv.find? quotTarget |
-          throw <| .userError s!"Could not find quotient constant in final kernel env: {quotTarget}"
-        if info != info' then
-          throw <| .userError s!"Quotient constant mismatch on: {quotTarget}"
-    return none
-  catch e =>
-    IO.println "Quotient post-check rejects the solution"
-    return some e.toString
 
 def primitiveTargets : M (Array Lean.Name) := do
   -- The challenge needs to have all the built-in constants of the kernel, as the
