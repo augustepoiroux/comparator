@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Henrik Böving
 -/
 import Lean
+import Lean4Checker.Replay
 import Comparator
 import Export.Parse
 
@@ -209,7 +210,7 @@ def runBuiltinKernel (solution : Export.ExportedEnv) : M (Option String) := do
   -- multiple times leads to errors.
   constMap := constMap.erase `Quot.mk |>.erase `Quot.lift |>.erase `Quot.ind
   try
-    discard <| env.replay constMap
+    discard <| env.replay' constMap
     IO.println "Lean default kernel accepts the solution"
     return none
   catch e =>
