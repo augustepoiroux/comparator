@@ -69,6 +69,30 @@ def addWorklist (n : Lean.Name) : CompareM Unit := do
 def addRelevantConsts (info : Lean.ConstantInfo) : CompareM Unit := do
   runForUsedConsts info addWorklist
 
+partial def matchDefn (decl : Lean.Name) (chal sol : Export.ExportedEnv) (e1 e2 : Lean.Expr)
+    (aux : Array Lean.Name := #[]) : Option (Array Lean.Name) := do
+  if e1 == e2 then return aux
+  match e1, e2 with
+  | .app f1 a1, .app f2 a2 => matchDefn decl chal sol a1 a2 (← matchDefn decl chal sol f1 f2 aux)
+  | .lam _ t1 b1 bi1, .lam _ t2 b2 bi2 | .forallE _ t1 b1 bi1, .forallE _ t2 b2 bi2 =>
+    guard (bi1 == bi2)
+    matchDefn decl chal sol b1 b2 (← matchDefn decl chal sol t1 t2 aux)
+  | .letE _ t1 v1 b1 _, .letE _ t2 v2 b2 _ =>
+    matchDefn decl chal sol b1 b2 (← matchDefn decl chal sol v1 v2 (← matchDefn decl chal sol t1 t2 aux))
+  | .proj s1 i1 b1, .proj s2 i2 b2 =>
+    guard (s1 == s2 && i1 == i2)
+    matchDefn decl chal sol b1 b2 aux
+  | .mdata _ b1, .mdata _ b2 => matchDefn decl chal sol b1 b2 aux
+  | .const n1 ls1, .const n2 ls2 =>
+    guard (ls1 == ls2)
+    if n1 == n2 then return aux
+    guard (decl.isPrefixOf n1 && decl.isPrefixOf n2)
+    let some (.thmInfo c1) := chal.constMap[n1]? | none
+    let some (.thmInfo c2) := sol.constMap[n2]? | none
+    guard (c1.type == c2.type && c1.levelParams == c2.levelParams)
+    return aux.push n2
+  | _, _ => none
+
 partial def loop : CompareM Unit := do
   if (← get).worklist.isEmpty then
     return ()
@@ -86,12 +110,24 @@ partial def loop : CompareM Unit := do
         || (← read).theoremTargets.contains solutionConst.name then
       solutionConst.type.getUsedConstants.forM addWorklist
     else
-      let matchOk :=
+      let ctx ← read
+      let (matchOk, auxMatches) :=
         match challengeConst, solutionConst with
-        | .thmInfo cc, .thmInfo sc => cc.toConstantVal == sc.toConstantVal
-        | _, _ => challengeConst == solutionConst
+        | .thmInfo cc, .thmInfo sc => (cc.toConstantVal == sc.toConstantVal, #[])
+        | .defnInfo cd, .defnInfo sd =>
+          if cd.toConstantVal == sd.toConstantVal && cd.safety == sd.safety then
+            if cd.value == sd.value then (true, #[])
+            else match matchDefn cd.name ctx.challenge ctx.solution cd.value sd.value with
+              | some m => (true, m)
+              | none => (false, #[])
+          else (false, #[])
+        | _, _ => (challengeConst == solutionConst, #[])
       unless matchOk do
         throw s!"Const does not match between challenge and target '{target}'"
+      for auxSolName in auxMatches do
+        if let some (.thmInfo c2) := ctx.solution.constMap[auxSolName]? then
+          modify fun s => { s with checked := s.checked.insert auxSolName }
+          c2.type.getUsedConstants.forM addWorklist
       match solutionConst with
       | .thmInfo cc => cc.type.getUsedConstants.forM addWorklist
       | _ => addRelevantConsts solutionConst

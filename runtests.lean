@@ -33,7 +33,7 @@ structure TestConfig where
 
 inductive TestResult
   | success (projectName : String)
-  | failure (projectName : String) (expected : Nat) (actual : Nat)
+  | failure (projectName : String) (expected : Nat) (actual : Nat) (output : String)
   | error (projectName : String) (message : String)
 
 def copyFile (src : FilePath) (dst : FilePath) : IO Unit := do
@@ -89,7 +89,7 @@ def readTestConfig (configPath : FilePath) : IO TestConfig := do
 def getTempDir : IO FilePath := do
   return "/tmp" / s!"lean_test_{← IO.rand 0 999999}"
 
-def runTestProject (projectPath : FilePath) (projectName : String) (_testsDir : FilePath)
+def runTestProject (projectPath : FilePath) (projectName : String) (repoDir : FilePath)
     (comparatorPath : FilePath) : IO TestResult := do
   let mut tempDirCreated := none
   try
@@ -102,11 +102,11 @@ def runTestProject (projectPath : FilePath) (projectName : String) (_testsDir : 
 
     copyDirContents projectPath tempDir
 
-    copyFile "lean-toolchain" (tempDir / "lean-toolchain")
+    copyFile (repoDir / "lean-toolchain") (tempDir / "lean-toolchain")
 
     createAdditionalFiles tempDir
 
-    let projectDir ← IO.FS.realPath "."
+    let projectDir ← IO.FS.realPath repoDir
     IO.FS.createDirAll (tempDir / ".lake")
     let _ ← runCommandInDir tempDir "ln" #["-sf", (projectDir / ".lake" / "packages").toString, (tempDir / ".lake" / "packages").toString]
 
@@ -165,7 +165,7 @@ def runTestProject (projectPath : FilePath) (projectName : String) (_testsDir : 
     if exitCode == config.exit_code then
       return TestResult.success projectName
     else
-      return TestResult.failure projectName config.exit_code exitCode
+      return TestResult.failure projectName config.exit_code exitCode outputTrace
 
   catch e =>
     if let some tempDir := tempDirCreated then
@@ -188,15 +188,16 @@ def printTestResult (result : TestResult) : IO Unit := do
   match result with
   | .success name =>
     IO.println s!"✓ {name}: PASSED"
-  | .failure name expected actual =>
-    IO.println s!"✗ {name}: FAILED (expected exit code {expected}, got {actual})"
+  | .failure name expected actual output =>
+    IO.println s!"✗ {name}: FAILED (expected exit code {expected}, got {actual})\nOutput:\n{output}"
   | .error name msg =>
     IO.println s!"✗ {name}: ERROR - {msg}"
 
 /-- Run comparator integration tests. When `args` is non-empty, only tests whose
 project name contains one of the given strings (as a substring) are executed. -/
 def main (args : List String) : IO UInt32 := do
-  let testsDir : FilePath := "tests"
+  let repoDir : FilePath := (← IO.getEnv "COMPARATOR_REPO_DIR").map FilePath.mk |>.getD "."
+  let testsDir : FilePath := repoDir / "tests"
   let filters := args
 
   IO.println "# Running tests\n"
@@ -215,14 +216,14 @@ def main (args : List String) : IO UInt32 := do
       IO.println s!"No projects matching {filters} found!"
     return 1
 
-  let comparatorPath ← IO.FS.realPath <| ".lake" / "build" / "bin" / "comparator"
+  let comparatorPath ← IO.FS.realPath <| repoDir / ".lake" / "build" / "bin" / "comparator"
 
   let mut allPassed := true
   let mut results := #[]
   for projectPath in projects do
     let projectName := projectPath.fileName.get!
     IO.println s!"\n## Running test: {projectName}\n"
-    let result ← runTestProject projectPath projectName testsDir comparatorPath
+    let result ← runTestProject projectPath projectName repoDir comparatorPath
     results := results.push result
     match result with
     | .success _ => pure ()
