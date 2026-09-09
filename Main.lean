@@ -154,6 +154,7 @@ def runExternalKernel (kernelName : String) (kernelCommand : Array String)
       ("export_file_path", solutionPath.toString),
       ("permitted_axioms", .arr <| legalAxioms.map (.str ∘ Lean.Name.toString)),
       ("unpermitted_axiom_hard_error", true),
+      ("num_threads", 4),
       ("nat_extension", true),
       ("string_extension", true),
     ]
@@ -255,10 +256,18 @@ def primitiveTargets : M (Array Lean.Name) := do
     ``Char.ofNat,
     ``List,
     ``eagerReduce,
+    ``Nat,
+    ``String,
+    ``String.mk,
+    ``Char,
+    ``optParam,
+    ``autoParam,
+    ``semiOutParam,
+    ``outParam
   ]
 
 def builtinTargets : M (Array Lean.Name) := do
-  let mut additional := #[``Nat, ``String, ``String.mk, ``Char]
+  let mut additional := #[]
   if (← getLegalAxioms).contains ``Quot.sound then
     additional := additional ++ #[``Quot, ``Quot.mk, ``Quot.lift, ``Quot.ind]
   return additional
