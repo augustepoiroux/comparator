@@ -108,7 +108,7 @@ partial def loop : CompareM Unit := do
 
     if (← read).definitionTargets.contains solutionConst.name
         || (← read).theoremTargets.contains solutionConst.name then
-      solutionConst.type.getUsedConstants.forM addWorklist
+      (getUsedConstants solutionConst.type).forM addWorklist
     else
       let ctx ← read
       let (matchOk, auxMatches) :=
@@ -127,9 +127,9 @@ partial def loop : CompareM Unit := do
       for auxSolName in auxMatches do
         if let some (.thmInfo c2) := ctx.solution.constMap[auxSolName]? then
           modify fun s => { s with checked := s.checked.insert auxSolName }
-          c2.type.getUsedConstants.forM addWorklist
+          (getUsedConstants c2.type).forM addWorklist
       match solutionConst with
-      | .thmInfo cc => cc.type.getUsedConstants.forM addWorklist
+      | .thmInfo cc => (getUsedConstants cc.type).forM addWorklist
       | _ => addRelevantConsts solutionConst
 
     modify fun s => { s with checked := s.checked.insert target }
@@ -173,7 +173,7 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
       if challengeConst != solutionConst then
         throw s!"Challenge and solution theorem statement do not match: '{target}'"
 
-    worklist := worklist ++ challengeConst.type.getUsedConstants
+    worklist := worklist ++ getUsedConstants challengeConst.type
 
   for target in definitionTargets do
     let some challengeConst := challenge.constMap[target]?
