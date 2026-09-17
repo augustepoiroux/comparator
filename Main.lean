@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Henrik Böving
 -/
 import Lean
+import Lean4Checker.Replay
 import Comparator
 import Export.Parse
 
@@ -211,7 +212,7 @@ def runBuiltinKernel (solution : Export.ExportedEnv) : M (Option String) := do
   let quotTargets := [`Quot.mk, `Quot.lift, `Quot.ind]
   let kernelConstMap := quotTargets.foldl (init := origConstMap) (·.erase ·)
   try
-    env ← env.replay kernelConstMap
+    env ← env.replay' kernelConstMap
     IO.println "Lean default kernel accepts the solution"
   catch e =>
     IO.println "Lean default kernel rejects the solution"
