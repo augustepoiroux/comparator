@@ -29,6 +29,7 @@ structure TestConfig where
   expected_json_output : Option Lean.Json := none
   two_phase_cli_snapshot : Option String := none
   simulate_agent_edit : Option (String × String) := none
+  tamper_snapshot_header : Option String := none
   deriving FromJson, ToJson
 
 inductive TestResult
@@ -126,6 +127,10 @@ def runTestProject (projectPath : FilePath) (projectName : String) (repoDir : Fi
       else
         if let some (src, dst) := config.simulate_agent_edit then
           copyFile (tempDir / src) (tempDir / dst)
+        if let some header := config.tamper_snapshot_header then
+          let snapPath := tempDir / snap
+          let rest := ((← IO.FS.readFile snapPath).splitOn "\n").drop 1
+          IO.FS.writeFile snapPath (String.intercalate "\n" (header :: rest))
         let (exit2, out2) ← runCommandInDir tempDir "lake" #["env", comparatorPath.toString, "--verify", snap, "config.json"]
         pure (exit2, out1 ++ "\n" ++ out2)
     else

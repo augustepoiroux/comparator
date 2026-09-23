@@ -1,8 +1,8 @@
 {
     "challenge_module": "Challenge",
     "solution_module": "Solution",
-    "theorem_names": ["foo", "bar"],
-    "definition_names": ["n", "m"],
+    "theorem_names": ["present", "absent_typo"],
+    "must_resolve_all_sorries": false,
     "permitted_axioms": ["propext", "Quot.sound", "Classical.choice"],
     "enable_nanoda": false
 }

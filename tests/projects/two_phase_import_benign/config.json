@@ -1,7 +1,7 @@
 {
     "challenge_module": "Challenge",
     "solution_module": "Solution",
-    "theorem_names": ["challenge"],
+    "theorem_names": ["challenge", "shared_target"],
     "permitted_axioms": ["propext", "Quot.sound", "Classical.choice"],
     "enable_nanoda": false
 }

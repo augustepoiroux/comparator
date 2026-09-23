@@ -202,7 +202,7 @@ where
     -- TODO: get rid of this heuristic
     kernelName.contains "noda"
 
-def runBuiltinKernel (solution : Export.ExportedEnv) : M (Option String) := do
+def runBuiltinKernel (solution : Export.ExportedEnv) (targets : Array Lean.Name := #[]) : M (Option String) := do
   IO.println "Running Lean default kernel on solution."
   let env ← Lean.mkEmptyEnvironment
   let mut kernelEnv := env.toKernelEnv
@@ -219,13 +219,12 @@ def runBuiltinKernel (solution : Export.ExportedEnv) : M (Option String) := do
     return some e.toString
 
   try
-    let verifyTargets := `Quot :: quotTargets
-    for quotTarget in verifyTargets do
-      if let some info := origConstMap[quotTarget]? then
-        let some info' := kernelEnv.find? quotTarget |
-          throw <| .userError s!"Could not find quotient constant in final kernel env: {quotTarget}"
-        if info != info' then
-          throw <| .userError s!"Quotient constant mismatch on: {quotTarget}"
+    -- Replay can skip a constant without throwing, so require each target to be present in
+    -- the final env. The filter is for `Quot*` only; `compareIt` asserts `targets` are present.
+    let verifyTargets := #[`Quot] ++ quotTargets.toArray ++ targets
+    for name in verifyTargets.filter origConstMap.contains do
+      if kernelEnv.find? name != origConstMap[name]? then
+        throw <| .userError s!"Constant mismatch in final kernel env on: {name}"
     return none
   catch e =>
     IO.println "Quotient post-check rejects the solution"
@@ -270,6 +269,8 @@ def builtinTargets : M (Array Lean.Name) := do
   let mut additional := #[]
   if (← getLegalAxioms).contains ``Quot.sound then
     additional := additional ++ #[``Quot, ``Quot.mk, ``Quot.lift, ``Quot.ind]
+  if ← getAllowDisproofs then
+    additional := additional ++ #[``False, ``Not]
   return additional
 
 def nameToOleanPath (projectDir : System.FilePath) (name : Lean.Name) : System.FilePath :=
@@ -295,24 +296,18 @@ def runQueryDecls (mode : String) (module : Lean.Name) : M (Array Lean.Name) := 
     executablePaths := #[whichQueryDecls]
   }
 
-  return (stdout.splitOn "\n" |>.filter (!·.isEmpty) |>.map String.toName).toArray
+  let json ← IO.ofExcept <| Lean.Json.parse stdout
+  IO.ofExcept <| Lean.FromJson.fromJson? json
 
-def filterExportTargets (module : Lean.Name) (decls : Array Lean.Name) : M (Array Lean.Name) := do
-  let localDecls ← runQueryDecls "list-decls" module
-  let localConsts := Std.HashSet.ofArray localDecls
-  let coreConsts := Std.HashSet.ofArray ((← primitiveTargets) ++ (← builtinTargets) ++ (← getLegalAxioms))
-  return decls.filter fun t => coreConsts.contains t || localConsts.contains t
-
-def safeExport (module : Lean.Name) (decls : Array Lean.Name) : M String := do
-  let decls ← filterExportTargets module decls
+def safeExport (module : Lean.Name) (decls : Array Lean.Name) (ignoreMissing : Bool := true) : M String := do
   IO.println s!"Exporting {decls} from {module}"
 
+  let flagArgs := if ignoreMissing then #["--ignore-missing", module.toString] else #[module.toString]
   let args :=
     if decls.isEmpty then
-      #[module.toString]
+      flagArgs
     else
-      let baseArgs := #[module.toString, "--"]
-      decls.foldl (·.push <| ·.toString) baseArgs
+      decls.foldl (·.push <| ·.toString) (flagArgs.push "--")
 
   let leanPrefix ← getLeanPrefix
   let projectDir ← getProjectDir
@@ -449,7 +444,7 @@ def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name) (def
 
   return (acceptedNames, outcomes)
 
-def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) :
+def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) (definitionNames : Array Lean.Name) :
     M VerificationOutcome := do
   let legalAxioms ← getLegalAxioms
   let targetInfo := getInfo challenge d |>.getD ⟨.axiomInfo ⟨⟨d, [], .sort .zero⟩, false⟩, #[]⟩
@@ -461,13 +456,16 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) :
   if tKind != sKind then
     return ⟨targetInfo, some sInfo, some (.kind tKind sKind), none, some d⟩
 
+  let (_, deps) := (collectDeps solution d).run {}
+  let defsToCompare := (definitionNames.filter deps.contains).push d
+
   let fail ←
-    match Comparator.compareAt challenge solution #[] #[d] #[] with
+    match Comparator.compareAt challenge solution #[] defsToCompare #[] with
     | .error e =>
       IO.println s!"Definition check failed for {d}: {e}"
       pure <| some .defnCheck
     | .ok () =>
-      match Comparator.checkAxioms solution #[] #[d] legalAxioms with
+      match Comparator.checkAxioms solution #[] defsToCompare legalAxioms with
       | .error e => IO.println s!"Axiom check failed for definition {d}: {e}"; pure <| some .axioms
       | .ok () => pure none
 
@@ -480,15 +478,24 @@ def throwFailures (header : String) (failures : Array (Lean.Name × Verification
   throw <| .userError msg
 
 def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNames : Array Lean.Name)
-    (definitionNames : Array Lean.Name) (allowPartialTheoremFailures : Bool) : M (Array Lean.Name) := do
+    (definitionNames : Array Lean.Name) (allowPartialTheoremFailures : Bool) :
+    M (Array Lean.Name × Export.ExportedEnv) := do
   let challenge ← Export.parseStream (← stringStream challengeExport)
   let solution ← Export.parseStream (← stringStream solutionExport)
+
+  -- Guards `--verify`, where the challenge comes from a snapshot rather than a fail-closed export.
+  for t in theoremNames do
+    unless challenge.constMap.contains t do
+      throw <| IO.userError s!"Challenge does not contain the configured theorem target '{t}'"
+  for d in definitionNames do
+    unless challenge.constMap.contains d do
+      throw <| IO.userError s!"Challenge does not contain the configured definition target '{d}'"
+
   let primTargets ← primitiveTargets
   let legalAxioms ← getLegalAxioms
   let mustResolveAllSorries ← getMustResolveAllSorries
-
-
-  IO.ofExcept <| Comparator.compareAt challenge solution legalAxioms #[] primTargets
+  let quotTargets := if legalAxioms.contains ``Quot.sound then #[``Quot, ``Quot.mk, ``Quot.lift, ``Quot.ind] else #[]
+  IO.ofExcept <| Comparator.compareAt challenge solution legalAxioms #[] (primTargets ++ quotTargets)
 
   let mut outcomes : Array (Lean.Name × VerificationOutcome) := #[]
   let mut acceptedTheorems := #[]
@@ -505,7 +512,7 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
         theoremFailures := theoremFailures.push (t, outcome)
 
   for d in definitionNames do
-    let outcome ← verifyDefinition challenge solution d
+    let outcome ← verifyDefinition challenge solution d definitionNames
     outcomes := outcomes.push (d, outcome)
     if outcome.failureMode.isSome then
       definitionFailures := definitionFailures.push (d, outcome)
@@ -528,7 +535,7 @@ def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNam
       for (t, outcome) in theoremFailures do
         IO.println s!"WARNING: Theorem '{t}' remained unsolved: {outcome.failureMode.map repr}"
 
-  return acceptedTheorems
+  return (acceptedTheorems, solution)
 
 
 def getTargets (theorems : Array Lean.Name) (definitions : Array Lean.Name) : M (Array Lean.Name) := do
@@ -563,7 +570,7 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
       if theoremNames.isEmpty && definitionNames.isEmpty then
         throw <| .userError "No verification targets selected or found."
 
-      let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames)
+      let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames) (ignoreMissing := false)
       pure (challengeExport, theoremNames, definitionNames)
 
   if let some path := exportPath then
@@ -579,19 +586,30 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
 
   let allowDisproofs ← getAllowDisproofs
   let initialSolutionExportTargets := (← getTargets theoremNames definitionNames) ++ (if allowDisproofs then theoremNames.map disproofName else #[])
-  let solutionExport ← safeExport solutionModule initialSolutionExportTargets
+  let solutionExport ← safeExport solutionModule initialSolutionExportTargets (ignoreMissing := true)
 
   let allowPartialTheoremFailures := !(← getMustResolveAllSorries)
-  let acceptedTheorems ← verifyMatch challengeExport solutionExport theoremNames definitionNames allowPartialTheoremFailures
+  let (acceptedTheorems, initialSolution) ← verifyMatch challengeExport solutionExport theoremNames definitionNames allowPartialTheoremFailures
 
-  let verifiedSolutionExport ← safeExport solutionModule (← getTargets acceptedTheorems definitionNames)
+  let presentInitialTargets := initialSolutionExportTargets.filter (initialSolution.constMap.contains ·)
+  let verifiedTargets ← getTargets acceptedTheorems definitionNames
+  let presentVerifiedTargets := verifiedTargets.filter (initialSolution.constMap.contains ·)
+  let (verifiedSolutionExport, verifiedSolution) ←
+    if Std.HashSet.ofArray presentInitialTargets == Std.HashSet.ofArray presentVerifiedTargets then
+      pure (solutionExport, initialSolution)
+    else
+      let vExport ← safeExport solutionModule verifiedTargets (ignoreMissing := true)
+      pure (vExport, ← Export.parseStream (← stringStream vExport))
+
+  for t in acceptedTheorems ++ definitionNames do
+    if !verifiedSolution.constMap.contains t then
+      throw <| IO.userError s!"Verified solution export is missing accepted target '{t}'"
 
   let mut result := none
   for (kernelName, kernelCommand) in ← getExternalKernels do
     result := result <|> (← runExternalKernel kernelName kernelCommand verifiedSolutionExport)
 
-  let verifiedSolution ← Export.parseStream (← stringStream verifiedSolutionExport)
-  result := result <|> (← runBuiltinKernel verifiedSolution)
+  result := result <|> (← runBuiltinKernel verifiedSolution (acceptedTheorems ++ definitionNames))
 
   if let some error := result then
     throw <| IO.userError error

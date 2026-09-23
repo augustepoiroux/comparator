@@ -1,0 +1,8 @@
+{
+    "exit_code": 1,
+    "two_phase_cli_snapshot": "snapshot.txt",
+    "tamper_snapshot_header": "[\"present\",\"absent_typo\"]",
+    "expected_output": [
+        "Challenge does not contain the configured theorem target 'absent_typo'"
+    ]
+}

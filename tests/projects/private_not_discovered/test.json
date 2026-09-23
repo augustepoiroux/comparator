@@ -1,0 +1,8 @@
+{
+    "exit_code": 0,
+    "expected_output": [
+        "pub_target",
+        "Lean default kernel accepts the solution",
+        "Your solution is okay!"
+    ]
+}

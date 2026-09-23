@@ -83,14 +83,19 @@ partial def matchDefn (decl : Lean.Name) (chal sol : Export.ExportedEnv) (e1 e2 
     guard (s1 == s2 && i1 == i2)
     matchDefn decl chal sol b1 b2 aux
   | .mdata _ b1, .mdata _ b2 => matchDefn decl chal sol b1 b2 aux
-  | .const n1 ls1, .const n2 ls2 =>
+  | .const n1 ls1, .const n2 ls2 => do
     guard (ls1 == ls2)
-    if n1 == n2 then return aux
-    guard (decl.isPrefixOf n1 && decl.isPrefixOf n2)
-    let some (.thmInfo c1) := chal.constMap[n1]? | none
-    let some (.thmInfo c2) := sol.constMap[n2]? | none
-    guard (c1.type == c2.type && c1.levelParams == c2.levelParams)
-    return aux.push n2
+    -- Pair `decl`'s auxiliary proofs across environments: an honest solution may number them
+    -- differently. Sound by proof irrelevance -- both sides are theorems with matched statements.
+    if decl.isPrefixOf n1 && decl.isPrefixOf n2 && n1.isInternalDetail && n2.isInternalDetail then
+      if let some (.thmInfo c1) := chal.constMap[n1]? then
+        if let some (.thmInfo c2) := sol.constMap[n2]? then
+          guard (c1.levelParams == c2.levelParams)
+          let aux ← matchDefn decl chal sol c1.type c2.type aux
+          return aux.push n2
+    -- Unreachable as a success (`e1 == e2` short-circuits above): this is the failure path.
+    guard (n1 == n2)
+    return aux
   | _, _ => none
 
 partial def loop : CompareM Unit := do
@@ -124,12 +129,19 @@ partial def loop : CompareM Unit := do
         | _, _ => (challengeConst == solutionConst, #[])
       unless matchOk do
         throw s!"Const does not match between challenge and target '{target}'"
+      let auxSet := Std.HashSet.ofArray auxMatches
       for auxSolName in auxMatches do
         if let some (.thmInfo c2) := ctx.solution.constMap[auxSolName]? then
-          modify fun s => { s with checked := s.checked.insert auxSolName }
-          c2.type.getUsedConstants.forM addWorklist
+          for u in c2.type.getUsedConstants do
+            if !auxSet.contains u then
+              addWorklist u
       match solutionConst with
       | .thmInfo cc => cc.type.getUsedConstants.forM addWorklist
+      | .defnInfo sd =>
+        sd.type.getUsedConstants.forM addWorklist
+        for u in sd.value.getUsedConstants do
+          if !auxSet.contains u then
+            addWorklist u
       | _ => addRelevantConsts solutionConst
 
     modify fun s => { s with checked := s.checked.insert target }
@@ -161,6 +173,7 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
       unless checkDisproof cc.type cc.levelParams sc.type sc.levelParams do
         throw s!"Solution disproof statement does not match accepted disproof interface: '{dname}'"
 
+      worklist := worklist ++ sc.type.getUsedConstants
     else
       let some solutionConst := solution.constMap[target]?
         | throw s!"Const not found in solution: '{target}'"
