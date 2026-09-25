@@ -219,9 +219,10 @@ def runBuiltinKernel (solution : Export.ExportedEnv) (targets : Array Lean.Name 
     return some e.toString
 
   try
-    -- Replay can skip a constant without throwing, so require each target to be present in
-    -- the final env. The filter is for `Quot*` only; `compareIt` asserts `targets` are present.
-    let verifyTargets := #[`Quot] ++ quotTargets.toArray ++ targets
+    -- Replay can skip a constant without throwing, so check every exported constant against the
+    -- final env. `Quot*` and `targets` come first only to keep the error message stable. The
+    -- filter is for `Quot*` only; `compareIt` asserts `targets` are present.
+    let verifyTargets := #[`Quot] ++ quotTargets.toArray ++ targets ++ origConstMap.keysArray
     for name in verifyTargets.filter origConstMap.contains do
       if kernelEnv.find? name != origConstMap[name]? then
         throw <| .userError s!"Constant mismatch in final kernel env on: {name}"
@@ -477,19 +478,10 @@ def throwFailures (header : String) (failures : Array (Lean.Name × Verification
     msg := msg ++ s!"- {n}: {outcome.failureMode.map repr}\n"
   throw <| .userError msg
 
-def verifyMatch (challengeExport : String) (solutionExport : String) (theoremNames : Array Lean.Name)
+def verifyMatch (challenge : Export.ExportedEnv) (solutionExport : String) (theoremNames : Array Lean.Name)
     (definitionNames : Array Lean.Name) (allowPartialTheoremFailures : Bool) :
     M (Array Lean.Name × Export.ExportedEnv) := do
-  let challenge ← Export.parseStream (← stringStream challengeExport)
   let solution ← Export.parseStream (← stringStream solutionExport)
-
-  -- Guards `--verify`, where the challenge comes from a snapshot rather than a fail-closed export.
-  for t in theoremNames do
-    unless challenge.constMap.contains t do
-      throw <| IO.userError s!"Challenge does not contain the configured theorem target '{t}'"
-  for d in definitionNames do
-    unless challenge.constMap.contains d do
-      throw <| IO.userError s!"Challenge does not contain the configured definition target '{d}'"
 
   let primTargets ← primitiveTargets
   let legalAxioms ← getLegalAxioms
@@ -570,8 +562,19 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
       if theoremNames.isEmpty && definitionNames.isEmpty then
         throw <| .userError "No verification targets selected or found."
 
-      let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames) (ignoreMissing := false)
+      -- A missing target is rejected below, and a missing axiom, primitive or `Quot*` is rejected
+      -- by `verifyMatch`; a missing `False`/`Not` (see `builtinTargets`) only makes disproofs fail.
+      let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames) (ignoreMissing := true)
       pure (challengeExport, theoremNames, definitionNames)
+
+  -- The challenge export ignores missing roots, and `--verify` reads it from a snapshot.
+  let challenge ← Export.parseStream (← stringStream challengeExport)
+  for t in theoremNames do
+    unless challenge.constMap.contains t do
+      throw <| IO.userError s!"Challenge does not contain the configured theorem target '{t}'"
+  for d in definitionNames do
+    unless challenge.constMap.contains d do
+      throw <| IO.userError s!"Challenge does not contain the configured definition target '{d}'"
 
   if let some path := exportPath then
     let h ← IO.FS.Handle.mk path .write
@@ -589,7 +592,7 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
   let solutionExport ← safeExport solutionModule initialSolutionExportTargets (ignoreMissing := true)
 
   let allowPartialTheoremFailures := !(← getMustResolveAllSorries)
-  let (acceptedTheorems, initialSolution) ← verifyMatch challengeExport solutionExport theoremNames definitionNames allowPartialTheoremFailures
+  let (acceptedTheorems, initialSolution) ← verifyMatch challenge solutionExport theoremNames definitionNames allowPartialTheoremFailures
 
   let presentInitialTargets := initialSolutionExportTargets.filter (initialSolution.constMap.contains ·)
   let verifiedTargets ← getTargets acceptedTheorems definitionNames
@@ -599,7 +602,11 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
       pure (solutionExport, initialSolution)
     else
       let vExport ← safeExport solutionModule verifiedTargets (ignoreMissing := true)
-      pure (vExport, ← Export.parseStream (← stringStream vExport))
+      let vSol ← Export.parseStream (← stringStream vExport)
+      for (k, v) in vSol.constMap do
+        if initialSolution.constMap[k]? != some v then
+          throw <| IO.userError s!"Verified solution export differs from the checked export on '{k}'"
+      pure (vExport, vSol)
 
   for t in acceptedTheorems ++ definitionNames do
     if !verifiedSolution.constMap.contains t then

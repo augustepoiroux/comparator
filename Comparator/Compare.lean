@@ -70,8 +70,7 @@ def addRelevantConsts (info : Lean.ConstantInfo) : CompareM Unit := do
   runForUsedConsts info addWorklist
 
 partial def matchDefn (decl : Lean.Name) (chal sol : Export.ExportedEnv) (e1 e2 : Lean.Expr)
-    (aux : Array Lean.Name := #[]) : Option (Array Lean.Name) := do
-  if e1 == e2 then return aux
+    (aux : Array (Lean.Name × Lean.Name) := #[]) : Option (Array (Lean.Name × Lean.Name)) := do
   match e1, e2 with
   | .app f1 a1, .app f2 a2 => matchDefn decl chal sol a1 a2 (← matchDefn decl chal sol f1 f2 aux)
   | .lam _ t1 b1 bi1, .lam _ t2 b2 bi2 | .forallE _ t1 b1 bi1, .forallE _ t2 b2 bi2 =>
@@ -87,14 +86,26 @@ partial def matchDefn (decl : Lean.Name) (chal sol : Export.ExportedEnv) (e1 e2 
     guard (ls1 == ls2)
     -- Pair `decl`'s auxiliary proofs across environments: an honest solution may number them
     -- differently. Sound by proof irrelevance -- both sides are theorems with matched statements.
-    if decl.isPrefixOf n1 && decl.isPrefixOf n2 && n1.isInternalDetail && n2.isInternalDetail then
-      if let some (.thmInfo c1) := chal.constMap[n1]? then
-        if let some (.thmInfo c2) := sol.constMap[n2]? then
-          guard (c1.levelParams == c2.levelParams)
-          let aux ← matchDefn decl chal sol c1.type c2.type aux
-          return aux.push n2
-    -- Unreachable as a success (`e1 == e2` short-circuits above): this is the failure path.
-    guard (n1 == n2)
+    -- The pairing is a bijection, and an aux name may only be matched against another aux name.
+    let isAux1 := decl.isPrefixOf n1 && n1.isInternalDetail
+    let isAux2 := decl.isPrefixOf n2 && n2.isInternalDetail
+    if isAux1 || isAux2 then
+      guard (isAux1 && isAux2)
+      match chal.constMap[n1]?, sol.constMap[n2]? with
+      | some (.thmInfo c1), some (.thmInfo c2) =>
+        if aux.contains (n1, n2) then return aux
+        guard (!aux.any fun (a, b) => a == n1 || b == n2)
+        guard (c1.levelParams == c2.levelParams)
+        matchDefn decl chal sol c1.type c2.type (aux.push (n1, n2))
+      | some (.thmInfo _), _ | _, some (.thmInfo _) => none
+      | _, _ =>
+        guard (n1 == n2)
+        return aux
+    else
+      guard (n1 == n2)
+      return aux
+  | .bvar .., .bvar .. | .fvar .., .fvar .. | .mvar .., .mvar .. | .sort .., .sort .. | .lit .., .lit .. =>
+    guard (e1 == e2)
     return aux
   | _, _ => none
 
@@ -116,19 +127,19 @@ partial def loop : CompareM Unit := do
       solutionConst.type.getUsedConstants.forM addWorklist
     else
       let ctx ← read
-      let (matchOk, auxMatches) :=
+      let (matchOk, auxPairs) : Bool × Array (Lean.Name × Lean.Name) :=
         match challengeConst, solutionConst with
         | .thmInfo cc, .thmInfo sc => (cc.toConstantVal == sc.toConstantVal, #[])
         | .defnInfo cd, .defnInfo sd =>
           if cd.toConstantVal == sd.toConstantVal && cd.safety == sd.safety then
-            if cd.value == sd.value then (true, #[])
-            else match matchDefn cd.name ctx.challenge ctx.solution cd.value sd.value with
-              | some m => (true, m)
-              | none => (false, #[])
+            match matchDefn cd.name ctx.challenge ctx.solution cd.value sd.value with
+            | some m => (true, m)
+            | none => (false, #[])
           else (false, #[])
         | _, _ => (challengeConst == solutionConst, #[])
       unless matchOk do
         throw s!"Const does not match between challenge and target '{target}'"
+      let auxMatches : Array Lean.Name := auxPairs.map (·.2)
       let auxSet := Std.HashSet.ofArray auxMatches
       for auxSolName in auxMatches do
         if let some (.thmInfo c2) := ctx.solution.constMap[auxSolName]? then
