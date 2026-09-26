@@ -1,6 +1,117 @@
 import Lean
+import Export
+
+open Lean
+
+partial def collectAxiomsCached (env : Environment)
+    (cache : IO.Ref (Std.HashMap Name (Array Name))) (c : Name) : IO (Array Name) := do
+  if let some axs := (← cache.get)[c]? then return axs
+  cache.modify (·.insert c #[])
+  let addAx (axs : Array Name) (ax : Name) : Array Name := if axs.contains ax then axs else axs.push ax
+  let collectExpr (axs : Array Name) (e : Expr) : IO (Array Name) := do
+    let mut axs := axs
+    for d in e.getUsedConstants do
+      for ax in ← collectAxiomsCached env cache d do axs := addAx axs ax
+    return axs
+  let mut axs : Array Name := #[]
+  match env.find? c with
+  | some (.axiomInfo v) => axs ← collectExpr #[c] v.type
+  | some (.defnInfo v) | some (.thmInfo v) | some (.opaqueInfo v) =>
+    axs ← collectExpr (← collectExpr axs v.type) v.value
+  | some (.quotInfo _) | none => pure ()
+  | some (.ctorInfo v) => axs ← collectAxiomsCached env cache v.induct
+  | some (.recInfo v) =>
+    axs ← collectExpr axs v.type
+    for indName in v.all do
+      for ax in ← collectAxiomsCached env cache indName do axs := addAx axs ax
+    for rule in v.rules do axs ← collectExpr axs rule.rhs
+  | some (.inductInfo v) =>
+    for indName in v.all do cache.modify (·.insert indName #[])
+    for indName in v.all do
+      if let some (.inductInfo iv) := env.find? indName then
+        axs ← collectExpr axs iv.type
+        for ctor in iv.ctors do
+          if let some (.ctorInfo cv) := env.find? ctor then axs ← collectExpr axs cv.type
+    for indName in v.all do cache.modify (·.insert indName axs)
+  cache.modify (·.insert c axs)
+  return axs
+
+partial def dumpConstantOmitProofs (axiomCache : IO.Ref (Std.HashMap Name (Array Name))) (c : Name) : M Unit := do
+  let env := (← read).env
+  let some declar := env.find? c | return
+  if ((declar.isUnsafe || declar.isPartial) && !(← get).exportUnsafe) || (← get).visitedConstants.contains c then
+    return
+  let dumpDeps (e : Expr) : M Unit := e.getUsedConstants.forM (dumpConstantOmitProofs axiomCache)
+  match declar with
+  | .thmInfo val =>
+    modify fun st => { st with visitedConstants := st.visitedConstants.insert c }
+    dumpDeps val.type
+    let exportUnsafe := (← get).exportUnsafe
+    let axioms := (← collectAxiomsCached env axiomCache val.name).filter fun ax =>
+      match env.find? ax with | some d => (!d.isUnsafe && !d.isPartial) || exportUnsafe | none => false
+    axioms.forM (dumpConstantOmitProofs axiomCache)
+    let dummyVal := axioms.foldl (fun acc ax => .app acc (.const ax [])) (.bvar 0)
+    IO.println <| Json.mkObj [("thm", Json.mkObj [
+      ("name", ← dumpName val.name), ("levelParams", ← dumpUparams val.levelParams),
+      ("type", ← dumpExpr val.type), ("value", ← dumpExpr dummyVal), ("all", ← dumpNames val.all)
+    ])] |>.compress
+  | .axiomInfo val =>
+    modify fun st => { st with visitedConstants := st.visitedConstants.insert c }
+    dumpDeps val.type
+    modify fun st => { st with visitedConstants := st.visitedConstants.erase c }
+    dumpConstant c
+  | .defnInfo val | .opaqueInfo val =>
+    modify fun st => { st with visitedConstants := st.visitedConstants.insert c }
+    dumpDeps val.type; dumpDeps val.value
+    modify fun st => { st with visitedConstants := st.visitedConstants.erase c }
+    dumpConstant c
+  | .quotInfo _ => dumpConstantOmitProofs axiomCache ``Eq; dumpConstant c
+  | .ctorInfo val => dumpConstantOmitProofs axiomCache val.induct
+  | .recInfo val => val.all.forM (dumpConstantOmitProofs axiomCache)
+  | .inductInfo baseIndVal =>
+    let recNames := (← get).recursorMap.get? baseIndVal.name |>.getD {}
+    let mut blockNames := recNames.insert c
+    for indName in baseIndVal.all do
+      blockNames := blockNames.insert indName
+      if let some (.inductInfo indVal) := env.find? indName then
+        blockNames := indVal.ctors.foldl (·.insert ·) blockNames
+    modify fun st => { st with visitedConstants := blockNames.foldl (·.insert ·) st.visitedConstants }
+    for indName in baseIndVal.all do
+      if let some (.inductInfo indVal) := env.find? indName then
+        dumpDeps indVal.type
+        for ctor in indVal.ctors do
+          if let some (.ctorInfo ctorVal) := env.find? ctor then dumpDeps ctorVal.type
+    for recName in recNames do
+      if let some (.recInfo recVal) := env.find? recName then
+        dumpDeps recVal.type
+        for rule in recVal.rules do dumpDeps rule.rhs
+    modify fun st => { st with visitedConstants := blockNames.foldl (·.erase ·) st.visitedConstants }
+    dumpConstant c
+
+def runExportOmitProofs (args : List String) : IO Unit := do
+  initSearchPath (← findSysroot)
+  let (opts, args) := args.partition (fun s => s.startsWith "--" && s.length ≥ 3)
+  let (imports, constants) := args.span (· != "--")
+  let imports := imports.toArray.map fun mod => { module := Syntax.decodeNameLit ("`" ++ mod) |>.get! }
+  let env ← importModules imports {}
+  let constants := match constants.tail? with
+    | some cs => cs.map fun c => Syntax.decodeNameLit ("`" ++ c) |>.get!
+    | none    => env.constants.toList.map Prod.fst |>.filter (!·.isInternal)
+  let axiomCache ← IO.mkRef ({} : Std.HashMap Name (Array Name))
+  M.run env do
+    let _ ← initState env opts
+    dumpMetadata
+    for prim in #[``Nat, ``Char.ofNat, ``String.ofList] do
+      if ((← read).env.find? prim).isSome then
+        modify (fun st => { st with noMDataExprs := {} })
+        dumpConstantOmitProofs axiomCache prim
+    for c in constants do
+      modify (fun st => { st with noMDataExprs := {} })
+      dumpConstantOmitProofs axiomCache c
 
 def main (args : List String) : IO Unit := do
+  if args.head? == some "export-omit-proofs" then
+    return ← runExportOmitProofs (args.drop 1)
   let oleanPath : System.FilePath := args[0]!
   -- Module-system oleans split their data across three files and the *body* of a `public theorem`
   -- lives in the private part, so reading only the main `.olean` would hide `sorryAx`. Key off

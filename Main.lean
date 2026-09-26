@@ -202,6 +202,89 @@ where
     -- TODO: get rid of this heuristic
     kernelName.contains "noda"
 
+namespace Replay
+
+structure State where
+  env : Lean.Kernel.Environment
+  remaining : Lean.NameSet := {}
+  pending : Lean.NameSet := {}
+  postponedConstructors : Lean.NameSet := {}
+  postponedRecursors : Lean.NameSet := {}
+  thmTasks : Array (Lean.Name × Task (Except Lean.Kernel.Exception Unit)) := #[]
+
+abbrev M := ReaderT (Std.HashMap Lean.Name Lean.ConstantInfo) <| StateRefT State IO
+
+def throwKernelException (ex : Lean.Kernel.Exception) : IO α := do
+  throw <| .userError <| ← (ex.toMessageData {}).toString
+
+def addDecl (d : Lean.Declaration) : M Unit := do
+  match (← get).env.addDeclCore 0 0 d none with
+  | .ok env => modify ({ · with env })
+  | .error ex => throwKernelException ex
+
+partial def replayConstant (name : Lean.Name) : M Unit := do
+  if (← get).remaining.contains name then
+    modify fun s => { s with remaining := s.remaining.erase name, pending := s.pending.insert name }
+    let some ci := (← read)[name]? | unreachable!
+    for n in ci.getUsedConstantsAsSet do replayConstant n
+    if (← get).pending.contains name then
+      try
+        match ci with
+        | .defnInfo info => addDecl (.defnDecl info)
+        | .thmInfo info =>
+          let snapEnv := (← get).env
+          if let some (.thmInfo info') := snapEnv.find? ci.name then
+            if info.toConstantVal == info'.toConstantVal && info.all == info'.all then
+              return ← modify fun s => { s with pending := s.pending.erase name }
+          if let .error ex := snapEnv.addDeclCore 0 0 (.axiomDecl ⟨info.toConstantVal, false⟩) none then
+            throwKernelException ex
+          match snapEnv.addDeclWithoutChecking (.thmDecl info) with
+          | .ok env =>
+            let task := Task.spawn fun () =>
+              snapEnv.addDeclCore 0 0 (.thmDecl info) none |>.map fun _ => ()
+            modify fun s => { s with env, thmTasks := s.thmTasks.push (name, task) }
+          | .error ex => throwKernelException ex
+        | .axiomInfo info => addDecl (.axiomDecl info)
+        | .opaqueInfo info => addDecl (.opaqueDecl info)
+        | .inductInfo info =>
+          let all ← info.all.mapM fun n => return (← read)[n]!
+          for o in all do
+            modify fun s => { s with remaining := s.remaining.erase o.name, pending := s.pending.erase o.name }
+          let ctorInfo ← all.mapM fun ci => return (ci, ← ci.inductiveVal!.ctors.mapM fun n => return (← read)[n]!)
+          for (_, ctors) in ctorInfo do
+            for ctor in ctors do
+              for n in ctor.getUsedConstantsAsSet do replayConstant n
+          addDecl (.inductDecl info.levelParams info.numParams (ctorInfo.map fun ⟨ci, ctors⟩ =>
+            { name := ci.name, type := ci.type, ctors := ctors.map fun c => { name := c.name, type := c.type } }) false)
+        | .ctorInfo info => modify fun s => { s with postponedConstructors := s.postponedConstructors.insert info.name }
+        | .recInfo info => modify fun s => { s with postponedRecursors := s.postponedRecursors.insert info.name }
+        | .quotInfo _ => replayConstant `Eq; addDecl .quotDecl
+        modify fun s => { s with pending := s.pending.erase name }
+      catch ex => throw <| .userError s!"while replaying declaration '{name}':\n{ex}"
+
+def replay (newConstants : Std.HashMap Lean.Name Lean.ConstantInfo) (env : Lean.Kernel.Environment) :
+    IO Lean.Kernel.Environment := do
+  let remaining := newConstants.fold (init := (∅ : Lean.NameSet)) fun acc n ci =>
+    if !ci.isUnsafe && !ci.isPartial then acc.insert n else acc
+  let (_, s) ← StateRefT'.run (s := { env, remaining }) <| ReaderT.run (r := newConstants) do
+    for n in #[``Nat, ``Char.ofNat, ``String.ofList] do replayConstant n
+    for n in remaining do replayConstant n
+    for ctor in (← get).postponedConstructors do
+      match (← get).env.find? ctor, (← read)[ctor]? with
+      | some (.ctorInfo i), some (.ctorInfo i') => unless i == i' do throw <| .userError s!"Invalid constructor {ctor}"
+      | _, _ => throw <| .userError s!"No such constructor {ctor}"
+    for rec in (← get).postponedRecursors do
+      match (← get).env.find? rec, (← read)[rec]? with
+      | some (.recInfo i), some (.recInfo i') => unless i == i' do throw <| .userError s!"Invalid recursor {rec}"
+      | _, _ => throw <| .userError s!"No such recursor {rec}"
+    for (name, task) in (← get).thmTasks do
+      if let .error ex := task.get then
+        try throwKernelException ex
+        catch ex => throw <| .userError s!"while replaying declaration '{name}':\n{ex}"
+  return s.env
+
+end Replay
+
 def runBuiltinKernel (solution : Export.ExportedEnv) (targets : Array Lean.Name := #[]) : M (Option String) := do
   IO.println "Running Lean default kernel on solution."
   let env ← Lean.mkEmptyEnvironment
@@ -212,7 +295,7 @@ def runBuiltinKernel (solution : Export.ExportedEnv) (targets : Array Lean.Name 
   let quotTargets := [`Quot.mk, `Quot.lift, `Quot.ind]
   let kernelConstMap := quotTargets.foldl (init := origConstMap) (·.erase ·)
   try
-    kernelEnv ← kernelEnv.replay kernelConstMap
+    kernelEnv ← Replay.replay kernelConstMap kernelEnv
     IO.println "Lean default kernel accepts the solution"
   catch e =>
     IO.println "Lean default kernel rejects the solution"
@@ -278,14 +361,16 @@ def nameToOleanPath (projectDir : System.FilePath) (name : Lean.Name) : System.F
   let components := name.components.map (·.toString (escape := false))
   components.foldl (· / ·) (projectDir / ".lake" / "build" / "lib" / "lean") |>.withExtension "olean"
 
+def getWhichQueryDecls : M String := do
+  let queryDeclsPath := (← IO.appPath).parent.getD "" / "query_decls"
+  match ← IO.getEnv "COMPARATOR_QUERY_DECLS" with
+  | some path => pure path
+  | none => try pure (← IO.FS.realPath queryDeclsPath).toString catch _ => pure "query_decls"
+
 def runQueryDecls (module : Lean.Name) : M (Array Lean.Name × Array Lean.Name) := do
   let projectDir ← getProjectDir
   let oleanPath := nameToOleanPath projectDir module
-  let queryDeclsPath := (← IO.appPath).parent.getD "" / "query_decls"
-  let whichQueryDecls ←
-    match ← IO.getEnv "COMPARATOR_QUERY_DECLS" with
-    | some path => pure path
-    | none => try pure (← IO.FS.realPath queryDeclsPath).toString catch _ => pure "query_decls"
+  let whichQueryDecls ← getWhichQueryDecls
 
   let stdout ← runSandBoxedWithStdout {
     cmd := whichQueryDecls,
@@ -300,7 +385,8 @@ def runQueryDecls (module : Lean.Name) : M (Array Lean.Name × Array Lean.Name) 
   let json ← IO.ofExcept <| Lean.Json.parse stdout
   IO.ofExcept <| Lean.FromJson.fromJson? json
 
-def safeExport (module : Lean.Name) (decls : Array Lean.Name) (ignoreMissing : Bool := true) : M String := do
+def exportLandrunArgs (module : Lean.Name) (decls : Array Lean.Name) (ignoreMissing : Bool := true)
+    (omitThmProofs : Bool := false) : M LandrunArgs := do
   IO.println s!"Exporting {decls} from {module}"
 
   let flagArgs := if ignoreMissing then #["--ignore-missing", module.toString] else #[module.toString]
@@ -313,21 +399,77 @@ def safeExport (module : Lean.Name) (decls : Array Lean.Name) (ignoreMissing : B
   let leanPrefix ← getLeanPrefix
   let projectDir ← getProjectDir
   let dotLakeDir := projectDir / ".lake"
-  runSandBoxedWithStdout {
-    cmd := (← read).whichLean4Export
-    args := args,
-    envPass := #["PATH", "HOME", "LEAN_PATH", "LEAN_ABORT_ON_PANIC"]
-    envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
-    readablePaths := #[projectDir, dotLakeDir]
-    writablePaths := #[]
-    executablePaths := #[leanPrefix]
-  }
+  if omitThmProofs then
+    let whichQueryDecls ← getWhichQueryDecls
+    let omitArgs := if decls.isEmpty then #[module.toString] else decls.foldl (·.push <| ·.toString) #[module.toString, "--"]
+    return {
+      cmd := whichQueryDecls
+      args := #["export-omit-proofs"] ++ omitArgs,
+      envPass := #["PATH", "HOME", "LEAN_PATH", "LEAN_ABORT_ON_PANIC"]
+      envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
+      readablePaths := #[projectDir, dotLakeDir, whichQueryDecls]
+      writablePaths := #[]
+      executablePaths := #[leanPrefix, whichQueryDecls]
+    }
+  else
+    return {
+      cmd := (← read).whichLean4Export
+      args := args,
+      envPass := #["PATH", "HOME", "LEAN_PATH", "LEAN_ABORT_ON_PANIC"]
+      envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
+      readablePaths := #[projectDir, dotLakeDir]
+      writablePaths := #[]
+      executablePaths := #[leanPrefix]
+    }
 
-def stringStream (s : String) : BaseIO IO.FS.Stream := do
-  let ref ← IO.mkRef {
-    data := s.toByteArray
+def safeExport (module : Lean.Name) (decls : Array Lean.Name) (ignoreMissing : Bool := true)
+    (omitThmProofs : Bool := false) : M String := do
+  runSandBoxedWithStdout (← exportLandrunArgs module decls ignoreMissing omitThmProofs)
+
+def drainHandle (h : IO.FS.Handle) : IO Unit := do
+  try while !(← h.read 65536).isEmpty do pure () catch _ => pure ()
+
+def safeExportAndParse (module : Lean.Name) (decls : Array Lean.Name) : M Export.ExportedEnv := do
+  let spawnArgs ← exportLandrunArgs module decls
+  let proc ← IO.Process.spawn {
+    cmd := (← read).whichLandrun,
+    args := buildLandrunArgs spawnArgs,
+    env := spawnArgs.envOverride,
+    cwd := (← getProjectDir),
+    stdout := .piped,
+    stderr := .piped
   }
-  return IO.FS.Stream.ofBuffer ref
+  let stderrTask ← IO.asTask proc.stderr.readToEnd Task.Priority.dedicated
+  let res ← try
+    let env ← Comparator.Parse.parseStream (IO.FS.Stream.ofHandle proc.stdout)
+    drainHandle proc.stdout
+    pure (.ok env)
+  catch e =>
+    drainHandle proc.stdout
+    pure (.error e)
+  IO.eprint (← IO.ofExcept stderrTask.get)
+  let exitCode ← proc.wait
+  if exitCode != 0 then
+    throw <| .userError s!"Child exited with {exitCode}"
+  IO.ofExcept res
+
+def exportSolution (module : Lean.Name) (decls : Array Lean.Name) : M (String × Export.ExportedEnv) := do
+  if (← getExternalKernels).isEmpty then
+    return ("", ← safeExportAndParse module decls)
+  else
+    let exp ← safeExport module decls
+    return (exp, ← Comparator.Parse.parse exp)
+
+def parseChallenge (challengeExport : String) (theoremNames definitionNames : Array Lean.Name) :
+    IO Export.ExportedEnv := do
+  let challenge ← Comparator.Parse.parse challengeExport
+  for t in theoremNames do
+    unless challenge.constMap.contains t do
+      throw <| IO.userError s!"Challenge does not contain the configured theorem target '{t}'"
+  for d in definitionNames do
+    unless challenge.constMap.contains d do
+      throw <| IO.userError s!"Challenge does not contain the configured definition target '{d}'"
+  return challenge
 
 @[inline]
 def getMustResolveAllSorries : M Bool := do return (← read).mustResolveAllSorries
@@ -491,11 +633,9 @@ def throwFailures (header : String) (failures : Array (Lean.Name × Verification
     msg := msg ++ s!"- {n}: {outcome.failureMode.map repr}\n"
   throw <| .userError msg
 
-def verifyMatch (challenge : Export.ExportedEnv) (solutionExport : String) (theoremNames : Array Lean.Name)
+def verifyMatch (challenge solution : Export.ExportedEnv) (theoremNames : Array Lean.Name)
     (definitionNames : Array Lean.Name) (allowPartialTheoremFailures : Bool) :
-    M (Array Lean.Name × Export.ExportedEnv) := (StateRefT'.run' · {}) do
-  let solution ← Export.parseStream (← stringStream solutionExport)
-
+    M (Array Lean.Name) := (StateRefT'.run' · {}) do
   let primTargets ← primitiveTargets
   let legalAxioms ← getLegalAxioms
   let mustResolveAllSorries ← getMustResolveAllSorries
@@ -541,7 +681,7 @@ def verifyMatch (challenge : Export.ExportedEnv) (solutionExport : String) (theo
       for (t, outcome) in theoremFailures do
         IO.println s!"WARNING: Theorem '{t}' remained unsolved: {outcome.failureMode.map repr}"
 
-  return (acceptedTheorems, solution)
+  return acceptedTheorems
 
 
 def getTargets (theorems : Array Lean.Name) (definitions : Array Lean.Name) : M (Array Lean.Name) := do
@@ -578,18 +718,11 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
 
       -- A missing target is rejected below, and a missing axiom, primitive or `Quot*` is rejected
       -- by `verifyMatch`; a missing `False`/`Not` (see `builtinTargets`) only makes disproofs fail.
-      let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames) (ignoreMissing := true)
+      let challengeExport ← safeExport challengeModule (← getTargets theoremNames definitionNames) (ignoreMissing := true) (omitThmProofs := true)
       pure (challengeExport, theoremNames, definitionNames)
 
   -- The challenge export ignores missing roots, and `--verify` reads it from a snapshot.
-  let challenge ← Export.parseStream (← stringStream challengeExport)
-  for t in theoremNames do
-    unless challenge.constMap.contains t do
-      throw <| IO.userError s!"Challenge does not contain the configured theorem target '{t}'"
-  for d in definitionNames do
-    unless challenge.constMap.contains d do
-      throw <| IO.userError s!"Challenge does not contain the configured definition target '{d}'"
-
+  let challenge ← parseChallenge challengeExport theoremNames definitionNames
   if let some path := exportPath then
     let h ← IO.FS.Handle.mk path .write
     h.putStrLn <| Lean.Json.compress <| Lean.ToJson.toJson (theoremNames.map (·.toString))
@@ -599,14 +732,13 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
     return
 
   let solutionModule ← getSolutionModule
-  safeLakeBuild solutionModule
-
   let allowDisproofs ← getAllowDisproofs
   let initialSolutionExportTargets := (← getTargets theoremNames definitionNames) ++ (if allowDisproofs then theoremNames.map disproofName else #[])
-  let solutionExport ← safeExport solutionModule initialSolutionExportTargets (ignoreMissing := true)
+  safeLakeBuild solutionModule
+  let (solutionExport, initialSolution) ← exportSolution solutionModule initialSolutionExportTargets
 
   let allowPartialTheoremFailures := !(← getMustResolveAllSorries)
-  let (acceptedTheorems, initialSolution) ← verifyMatch challenge solutionExport theoremNames definitionNames allowPartialTheoremFailures
+  let acceptedTheorems ← verifyMatch challenge initialSolution theoremNames definitionNames allowPartialTheoremFailures
 
   let presentInitialTargets := initialSolutionExportTargets.filter (initialSolution.constMap.contains ·)
   let verifiedTargets ← getTargets acceptedTheorems definitionNames
@@ -615,8 +747,7 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
     if Std.HashSet.ofArray presentInitialTargets == Std.HashSet.ofArray presentVerifiedTargets then
       pure (solutionExport, initialSolution)
     else
-      let vExport ← safeExport solutionModule verifiedTargets (ignoreMissing := true)
-      let vSol ← Export.parseStream (← stringStream vExport)
+      let (vExport, vSol) ← exportSolution solutionModule verifiedTargets
       for (k, v) in vSol.constMap do
         if initialSolution.constMap[k]? != some v then
           throw <| IO.userError s!"Verified solution export differs from the checked export on '{k}'"
