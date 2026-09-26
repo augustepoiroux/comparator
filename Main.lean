@@ -343,10 +343,6 @@ def primitiveTargets : M (Array Lean.Name) := do
     ``String,
     ``String.mk,
     ``Char,
-    ``optParam,
-    ``autoParam,
-    ``semiOutParam,
-    ``outParam
   ]
 
 def builtinTargets : M (Array Lean.Name) := do
