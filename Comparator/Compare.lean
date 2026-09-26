@@ -123,7 +123,7 @@ partial def loop : CompareM Unit := do
 
     if (← read).definitionTargets.contains solutionConst.name
         || (← read).theoremTargets.contains solutionConst.name then
-      solutionConst.type.getUsedConstants.forM addWorklist
+      (getUsedConstants solutionConst.type).forM addWorklist
     else
       let ctx ← read
       let (matchOk, auxPairs) : Bool × Array (Lean.Name × Lean.Name) :=
@@ -142,14 +142,14 @@ partial def loop : CompareM Unit := do
       let auxSet := Std.HashSet.ofArray auxMatches
       for auxSolName in auxMatches do
         if let some (.thmInfo c2) := ctx.solution.constMap[auxSolName]? then
-          for u in c2.type.getUsedConstants do
+          for u in getUsedConstants c2.type do
             if !auxSet.contains u then
               addWorklist u
       match solutionConst with
-      | .thmInfo cc => cc.type.getUsedConstants.forM addWorklist
+      | .thmInfo cc => (getUsedConstants cc.type).forM addWorklist
       | .defnInfo sd =>
-        sd.type.getUsedConstants.forM addWorklist
-        for u in sd.value.getUsedConstants do
+        (getUsedConstants sd.type).forM addWorklist
+        for u in getUsedConstants sd.value do
           if !auxSet.contains u then
             addWorklist u
       | _ => addRelevantConsts solutionConst
@@ -183,7 +183,7 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
       unless checkDisproof cc.type cc.levelParams sc.type sc.levelParams do
         throw s!"Solution disproof statement does not match accepted disproof interface: '{dname}'"
 
-      worklist := worklist ++ sc.type.getUsedConstants
+      worklist := worklist ++ getUsedConstants sc.type
     else
       let some solutionConst := solution.constMap[target]?
         | throw s!"Const not found in solution: '{target}'"
@@ -196,7 +196,7 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
       if challengeConst != solutionConst then
         throw s!"Challenge and solution theorem statement do not match: '{target}'"
 
-    worklist := worklist ++ challengeConst.type.getUsedConstants
+    worklist := worklist ++ getUsedConstants challengeConst.type
 
   for target in definitionTargets do
     let some challengeConst := challenge.constMap[target]?
