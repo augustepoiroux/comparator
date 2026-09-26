@@ -226,7 +226,7 @@ partial def replayConstant (name : Lean.Name) : M Unit := do
   if (← get).remaining.contains name then
     modify fun s => { s with remaining := s.remaining.erase name, pending := s.pending.insert name }
     let some ci := (← read)[name]? | unreachable!
-    for n in ci.getUsedConstantsAsSet do replayConstant n
+    runForUsedConsts ci replayConstant
     if (← get).pending.contains name then
       try
         match ci with
@@ -253,7 +253,7 @@ partial def replayConstant (name : Lean.Name) : M Unit := do
           let ctorInfo ← all.mapM fun ci => return (ci, ← ci.inductiveVal!.ctors.mapM fun n => return (← read)[n]!)
           for (_, ctors) in ctorInfo do
             for ctor in ctors do
-              for n in ctor.getUsedConstantsAsSet do replayConstant n
+              for n in getUsedConstants ctor.type do replayConstant n
           addDecl (.inductDecl info.levelParams info.numParams (ctorInfo.map fun ⟨ci, ctors⟩ =>
             { name := ci.name, type := ci.type, ctors := ctors.map fun c => { name := c.name, type := c.type } }) false)
         | .ctorInfo info => modify fun s => { s with postponedConstructors := s.postponedConstructors.insert info.name }
