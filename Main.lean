@@ -278,7 +278,7 @@ def nameToOleanPath (projectDir : System.FilePath) (name : Lean.Name) : System.F
   let components := name.components.map (·.toString (escape := false))
   components.foldl (· / ·) (projectDir / ".lake" / "build" / "lib" / "lean") |>.withExtension "olean"
 
-def runQueryDecls (mode : String) (module : Lean.Name) : M (Array Lean.Name) := do
+def runQueryDecls (module : Lean.Name) : M (Array Lean.Name × Array Lean.Name) := do
   let projectDir ← getProjectDir
   let oleanPath := nameToOleanPath projectDir module
   let queryDeclsPath := (← IO.appPath).parent.getD "" / "query_decls"
@@ -289,7 +289,7 @@ def runQueryDecls (mode : String) (module : Lean.Name) : M (Array Lean.Name) := 
 
   let stdout ← runSandBoxedWithStdout {
     cmd := whichQueryDecls,
-    args := #[mode, oleanPath.toString],
+    args := #[oleanPath.toString],
     envPass := #["PATH", "HOME", "LEAN_PATH", "LEAN_ABORT_ON_PANIC"]
     envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
     readablePaths := #[projectDir, projectDir / ".lake", whichQueryDecls]
@@ -322,7 +322,6 @@ def safeExport (module : Lean.Name) (decls : Array Lean.Name) (ignoreMissing : B
     writablePaths := #[]
     executablePaths := #[leanPrefix]
   }
-
 
 def stringStream (s : String) : BaseIO IO.FS.Stream := do
   let ref ← IO.mkRef {
@@ -391,36 +390,47 @@ def getAxioms (env : Export.ExportedEnv) (n : Lean.Name) : Array Lean.Name :=
   let (_, deps) := (collectDeps env n).run {}
   deps.toArray.filter fun dep => match env.constMap[dep]? with | some (.axiomInfo _) => true | _ => false
 
-def getInfo (env : Export.ExportedEnv) (n : Lean.Name) : Option Info := do
-  some ⟨← env.constMap[n]?, getAxioms env n⟩
+def getInfo (env : Export.ExportedEnv) (n : Lean.Name) : M (Option Info) := do
+  let withAxioms := (← getJsonOutputPath).isSome
+  return env.constMap[n]?.map fun ci => ⟨ci, if withAxioms then getAxioms env n else #[]⟩
+
+structure VerifyState where
+  compareChecked : Std.HashSet Lean.Name := {}
+  axiomChecked : Std.HashSet Lean.Name := {}
+
+abbrev VerifyM := StateRefT VerifyState M
 
 def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.Name)
     (solutionName : Lean.Name) (mode : TheoremMode) (targetInfo : Info) (definitionNames : Array Lean.Name) :
-    M (Bool × VerificationOutcome) := do
+    VerifyM (Bool × VerificationOutcome) := do
   let legalAxioms ← getLegalAxioms
-  let sInfo := (getInfo solution solutionName).get!
-  let (_, deps) := (collectDeps solution solutionName).run {}
-  let defsToCompare := definitionNames.filter deps.contains
+  let sInfo := (← getInfo solution solutionName).get!
+  let defsToCompare := if definitionNames.isEmpty then #[] else
+    let (_, deps) := (collectDeps solution solutionName).run {}
+    definitionNames.filter deps.contains
 
   let typeFailureMode : CheckFailure := match mode with | .direct => .thmType | .disproof => .disproofType
 
   let (accepted, fail) ←
-    match Comparator.compareAt challenge solution #[t] defsToCompare #[] (mode == .disproof) with
+    match Comparator.compareAt challenge solution #[t] defsToCompare #[] (mode == .disproof) (← get).compareChecked with
     | .error e =>
       IO.println s!"Verification failed for {solutionName}: {e}"
       pure (false, some typeFailureMode)
-    | .ok () =>
-      match Comparator.checkAxioms solution #[solutionName] defsToCompare legalAxioms with
+    | .ok compareChecked =>
+      modify ({ · with compareChecked })
+      match Comparator.checkAxioms solution #[solutionName] defsToCompare legalAxioms (← get).axiomChecked with
       | .error e => IO.println s!"Axiom check failed for {solutionName}: {e}"; pure (false, some .axioms)
-      | .ok () => pure (true, none)
+      | .ok axiomChecked =>
+        modify ({ · with axiomChecked })
+        pure (true, none)
 
   let outcome := ⟨targetInfo, some sInfo, fail, some mode, some solutionName⟩
   return (accepted, outcome)
 
 def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name) (definitionNames : Array Lean.Name) :
-    M (Array Lean.Name × Array (Lean.Name × VerificationOutcome)) := do
+    VerifyM (Array Lean.Name × Array (Lean.Name × VerificationOutcome)) := do
   let allowDisproofs ← getAllowDisproofs
-  let targetInfo := getInfo challenge t |>.getD ⟨.axiomInfo ⟨⟨t, [], .sort .zero⟩, false⟩, #[]⟩
+  let targetInfo := (← getInfo challenge t).getD ⟨.axiomInfo ⟨⟨t, [], .sort .zero⟩, false⟩, #[]⟩
   let directInfo := solution.constMap[t]?
   let dname := disproofName t
   let disproofInfo := if allowDisproofs then solution.constMap[dname]? else none
@@ -446,10 +456,10 @@ def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name) (def
   return (acceptedNames, outcomes)
 
 def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) (definitionNames : Array Lean.Name) :
-    M VerificationOutcome := do
+    VerifyM VerificationOutcome := do
   let legalAxioms ← getLegalAxioms
-  let targetInfo := getInfo challenge d |>.getD ⟨.axiomInfo ⟨⟨d, [], .sort .zero⟩, false⟩, #[]⟩
-  let some sInfo := getInfo solution d
+  let targetInfo := (← getInfo challenge d).getD ⟨.axiomInfo ⟨⟨d, [], .sort .zero⟩, false⟩, #[]⟩
+  let some sInfo ← getInfo solution d
     | return ⟨targetInfo, none, some .notFound, none, none⟩
 
   let tKind := constKind targetInfo.constInfo
@@ -461,14 +471,17 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) (
   let defsToCompare := (definitionNames.filter deps.contains).push d
 
   let fail ←
-    match Comparator.compareAt challenge solution #[] defsToCompare #[] with
+    match Comparator.compareAt challenge solution #[] defsToCompare #[] (checked := (← get).compareChecked) with
     | .error e =>
       IO.println s!"Definition check failed for {d}: {e}"
       pure <| some .defnCheck
-    | .ok () =>
-      match Comparator.checkAxioms solution #[] defsToCompare legalAxioms with
+    | .ok compareChecked =>
+      modify ({ · with compareChecked })
+      match Comparator.checkAxioms solution #[] defsToCompare legalAxioms (← get).axiomChecked with
       | .error e => IO.println s!"Axiom check failed for definition {d}: {e}"; pure <| some .axioms
-      | .ok () => pure none
+      | .ok axiomChecked =>
+        modify ({ · with axiomChecked })
+        pure none
 
   return ⟨targetInfo, some sInfo, fail, none, some d⟩
 
@@ -480,14 +493,15 @@ def throwFailures (header : String) (failures : Array (Lean.Name × Verification
 
 def verifyMatch (challenge : Export.ExportedEnv) (solutionExport : String) (theoremNames : Array Lean.Name)
     (definitionNames : Array Lean.Name) (allowPartialTheoremFailures : Bool) :
-    M (Array Lean.Name × Export.ExportedEnv) := do
+    M (Array Lean.Name × Export.ExportedEnv) := (StateRefT'.run' · {}) do
   let solution ← Export.parseStream (← stringStream solutionExport)
 
   let primTargets ← primitiveTargets
   let legalAxioms ← getLegalAxioms
   let mustResolveAllSorries ← getMustResolveAllSorries
   let quotTargets := if legalAxioms.contains ``Quot.sound then #[``Quot, ``Quot.mk, ``Quot.lift, ``Quot.ind] else #[]
-  IO.ofExcept <| Comparator.compareAt challenge solution legalAxioms #[] (primTargets ++ quotTargets)
+  let compareChecked ← IO.ofExcept <| Comparator.compareAt challenge solution legalAxioms #[] (primTargets ++ quotTargets)
+  modify ({ · with compareChecked })
 
   let mut outcomes : Array (Lean.Name × VerificationOutcome) := #[]
   let mut acceptedTheorems := #[]
@@ -544,6 +558,8 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
       let h ← IO.FS.Handle.mk path .read
       let thms : Array String ← IO.ofExcept (Lean.Json.parse (← h.getLine) >>= Lean.FromJson.fromJson?)
       let defs : Array String ← IO.ofExcept (Lean.Json.parse (← h.getLine) >>= Lean.FromJson.fromJson?)
+      if thms.isEmpty && defs.isEmpty then
+        throw <| .userError "No verification targets selected or found."
       let exp ← h.readToEnd
       pure (exp, thms.map String.toName, defs.map String.toName)
     else
@@ -553,9 +569,7 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
 
       let (theoremNames, definitionNames) ←
         if autoDiscover then
-          let thms ← runQueryDecls "find-sorry-theorems" challengeModule
-          let defs ← runQueryDecls "find-sorry-defs" challengeModule
-          pure (thms, defs)
+          runQueryDecls challengeModule
         else
           pure (configTheoremNames, configDefinitionNames)
 

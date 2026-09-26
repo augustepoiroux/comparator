@@ -1,11 +1,7 @@
 import Lean
 
 def main (args : List String) : IO Unit := do
-  let mode := args[0]!
-  unless mode == "find-sorry-theorems" || mode == "find-sorry-defs" do
-    throw <| .userError s!"Unknown query mode: {mode}"
-
-  let oleanPath : System.FilePath := args[1]!
+  let oleanPath : System.FilePath := args[0]!
   -- Module-system oleans split their data across three files and the *body* of a `public theorem`
   -- lives in the private part, so reading only the main `.olean` would hide `sorryAx`. Key off
   -- `isModule` (as `Lean.readModuleDataPartsOfMod` does) so a missing part is a hard error.
@@ -88,14 +84,13 @@ def main (args : List String) : IO Unit := do
     reported := reported.insert n
 
   let mut seen : Std.HashSet Lean.Name := {}
-  let mut names : Array Lean.Name := #[]
+  let mut thms : Array Lean.Name := #[]
+  let mut defs : Array Lean.Name := #[]
   for (modData, _) in parts do
     for ci in modData.constants do
-      let isCandidate := match mode, ci with
-        | "find-sorry-theorems", .thmInfo _ => true
-        | "find-sorry-defs", .defnInfo _ => true
-        | _, _ => false
-      if isCandidate && reported.contains ci.name && !seen.contains ci.name then
-        seen := seen.insert ci.name
-        names := names.push ci.name
-  IO.println <| Lean.Json.compress <| Lean.ToJson.toJson names
+      if reported.contains ci.name && !seen.contains ci.name then
+        match ci with
+        | .thmInfo _ => seen := seen.insert ci.name; thms := thms.push ci.name
+        | .defnInfo _ => seen := seen.insert ci.name; defs := defs.push ci.name
+        | _ => pure ()
+  IO.println <| Lean.Json.compress <| Lean.ToJson.toJson (thms, defs)

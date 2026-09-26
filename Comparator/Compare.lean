@@ -49,7 +49,6 @@ structure Context where
   challenge : Export.ExportedEnv
   solution : Export.ExportedEnv
   definitionTargets : Std.HashSet Lean.Name
-  theoremTargets : Std.HashSet Lean.Name
 
 structure State where
   worklist : Array Lean.Name
@@ -64,7 +63,7 @@ deriving instance BEq for Lean.ConstantInfo
 
 def addWorklist (n : Lean.Name) : CompareM Unit := do
   if !(← get).checked.contains n then
-    modify fun s => { s with worklist := s.worklist.push n }
+    modify fun s => { worklist := s.worklist.push n, checked := s.checked.insert n }
 
 def addRelevantConsts (info : Lean.ConstantInfo) : CompareM Unit := do
   runForUsedConsts info addWorklist
@@ -113,49 +112,44 @@ partial def loop : CompareM Unit := do
     return ()
 
   let target ← modifyGet fun s => (s.worklist.back!, { s with worklist := s.worklist.pop })
-  if (← get).checked.contains target then
-    loop
-  else
-    let some challengeConst := (← read).challenge.constMap[target]?
-      | throw s!"Const not found in challenge '{target}'"
-    let some solutionConst := (← read).solution.constMap[target]?
-      | throw s!"Const not found in solution '{target}'"
+  let some challengeConst := (← read).challenge.constMap[target]?
+    | throw s!"Const not found in challenge '{target}'"
+  let some solutionConst := (← read).solution.constMap[target]?
+    | throw s!"Const not found in solution '{target}'"
 
-    if (← read).definitionTargets.contains solutionConst.name
-        || (← read).theoremTargets.contains solutionConst.name then
-      solutionConst.type.getUsedConstants.forM addWorklist
-    else
-      let ctx ← read
-      let (matchOk, auxPairs) : Bool × Array (Lean.Name × Lean.Name) :=
-        match challengeConst, solutionConst with
-        | .thmInfo cc, .thmInfo sc => (cc.toConstantVal == sc.toConstantVal, #[])
-        | .defnInfo cd, .defnInfo sd =>
-          if cd.toConstantVal == sd.toConstantVal && cd.safety == sd.safety then
-            match matchDefn cd.name ctx.challenge ctx.solution cd.value sd.value with
-            | some m => (true, m)
-            | none => (false, #[])
-          else (false, #[])
-        | _, _ => (challengeConst == solutionConst, #[])
-      unless matchOk do
-        throw s!"Const does not match between challenge and target '{target}'"
-      let auxMatches : Array Lean.Name := auxPairs.map (·.2)
-      let auxSet := Std.HashSet.ofArray auxMatches
-      for auxSolName in auxMatches do
-        if let some (.thmInfo c2) := ctx.solution.constMap[auxSolName]? then
-          for u in c2.type.getUsedConstants do
-            if !auxSet.contains u then
-              addWorklist u
-      match solutionConst with
-      | .thmInfo cc => cc.type.getUsedConstants.forM addWorklist
-      | .defnInfo sd =>
-        sd.type.getUsedConstants.forM addWorklist
-        for u in sd.value.getUsedConstants do
+  if (← read).definitionTargets.contains solutionConst.name then
+    solutionConst.type.getUsedConstants.forM addWorklist
+  else
+    let ctx ← read
+    let (matchOk, auxPairs) : Bool × Array (Lean.Name × Lean.Name) :=
+      match challengeConst, solutionConst with
+      | .thmInfo cc, .thmInfo sc => (cc.toConstantVal == sc.toConstantVal, #[])
+      | .defnInfo cd, .defnInfo sd =>
+        if cd.toConstantVal == sd.toConstantVal && cd.safety == sd.safety then
+          match matchDefn cd.name ctx.challenge ctx.solution cd.value sd.value with
+          | some m => (true, m)
+          | none => (false, #[])
+        else (false, #[])
+      | _, _ => (challengeConst == solutionConst, #[])
+    unless matchOk do
+      throw s!"Const does not match between challenge and target '{target}'"
+    let auxMatches : Array Lean.Name := auxPairs.map (·.2)
+    let auxSet := Std.HashSet.ofArray auxMatches
+    for auxSolName in auxMatches do
+      if let some (.thmInfo c2) := ctx.solution.constMap[auxSolName]? then
+        for u in c2.type.getUsedConstants do
           if !auxSet.contains u then
             addWorklist u
-      | _ => addRelevantConsts solutionConst
+    match solutionConst with
+    | .thmInfo cc => cc.type.getUsedConstants.forM addWorklist
+    | .defnInfo sd =>
+      sd.type.getUsedConstants.forM addWorklist
+      for u in sd.value.getUsedConstants do
+        if !auxSet.contains u then
+          addWorklist u
+    | _ => addRelevantConsts solutionConst
 
-    modify fun s => { s with checked := s.checked.insert target }
-    loop
+  loop
 
 end Compare
 
@@ -164,7 +158,8 @@ def definitionHoleMatches (challengeHole solutionHole : Lean.DefinitionVal) : Bo
     && challengeHole.safety == solutionHole.safety
 
 def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array Lean.Name)
-    (definitionTargets : Array Lean.Name) (primitive : Array Lean.Name) (allowDisproofs : Bool := false) : Except String Unit := do
+    (definitionTargets : Array Lean.Name) (primitive : Array Lean.Name) (allowDisproofs : Bool := false)
+    (checked : Std.HashSet Lean.Name := {}) : Except String (Std.HashSet Lean.Name) := do
   let mut worklist := primitive
 
   for target in theoremTargets do
@@ -216,7 +211,8 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
     worklist := worklist.push solutionConst.name
 
   let definitionTargets := Std.HashSet.ofArray definitionTargets
-  let theoremTargets := Std.HashSet.ofArray theoremTargets
-  Compare.loop.run { challenge, solution, definitionTargets, theoremTargets } |>.run' { worklist, checked := {} }
+  let (_, s) ← (do worklist.forM Compare.addWorklist; Compare.loop).run
+    { challenge, solution, definitionTargets } |>.run { worklist := #[], checked }
+  return s.checked
 
 end Comparator
