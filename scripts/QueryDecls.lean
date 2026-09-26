@@ -1,4 +1,5 @@
 import Lean
+import Comparator.Util
 
 def main (args : List String) : IO Unit := do
   let oleanPath : System.FilePath := args[0]!
@@ -42,8 +43,8 @@ def main (args : List String) : IO Unit := do
   let mut reaches : Std.HashSet Lean.Name := {}
   let mut queue : Array Lean.Name := #[]
   for (n, ci) in consts do
-    let used := ci.type.getUsedConstants ++
-      ((ci.value? (allowOpaque := true)).map (·.getUsedConstants) |>.getD #[])
+    let used := Comparator.getUsedConstants ci.type ++
+      ((ci.value? (allowOpaque := true)).map Comparator.getUsedConstants |>.getD #[])
     if used.contains `sorryAx then
       reaches := reaches.insert n
       queue := queue.push n
@@ -77,7 +78,7 @@ def main (args : List String) : IO Unit := do
       let mut skip := false
       while !p.isAnonymous && !skip do
         if reported.contains p then
-          skip := !(ci matches .thmInfo _) || ci.type.getUsedConstants.any (p.isPrefixOf ·)
+          skip := !(ci matches .thmInfo _) || (Comparator.getUsedConstants ci.type).any (p.isPrefixOf ·)
         p := p.getPrefix
       if skip then
         continue

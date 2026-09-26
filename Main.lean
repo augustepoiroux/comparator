@@ -204,15 +204,14 @@ where
 
 def runBuiltinKernel (solution : Export.ExportedEnv) (targets : Array Lean.Name := #[]) : M (Option String) := do
   IO.println "Running Lean default kernel on solution."
-  let env ← Lean.mkEmptyEnvironment
-  let mut kernelEnv := env.toKernelEnv
+  let mut env ← Lean.mkEmptyEnvironment
   let origConstMap := solution.constMap
   -- Lean's kernel interprets just the addition of `Quot as adding all of these so adding them
   -- multiple times leads to errors.
   let quotTargets := [`Quot.mk, `Quot.lift, `Quot.ind]
   let kernelConstMap := quotTargets.foldl (init := origConstMap) (·.erase ·)
   try
-    kernelEnv ← kernelEnv.replay kernelConstMap
+    env ← env.replay kernelConstMap
     IO.println "Lean default kernel accepts the solution"
   catch e =>
     IO.println "Lean default kernel rejects the solution"
@@ -224,7 +223,7 @@ def runBuiltinKernel (solution : Export.ExportedEnv) (targets : Array Lean.Name 
     -- filter is for `Quot*` only; `compareIt` asserts `targets` are present.
     let verifyTargets := #[`Quot] ++ quotTargets.toArray ++ targets ++ origConstMap.keysArray
     for name in verifyTargets.filter origConstMap.contains do
-      if kernelEnv.find? name != origConstMap[name]? then
+      if env.toKernelEnv.find? name != origConstMap[name]? then
         throw <| .userError s!"Constant mismatch in final kernel env on: {name}"
     return none
   catch e =>
