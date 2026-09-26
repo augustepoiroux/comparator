@@ -299,15 +299,36 @@ def runQueryDecls (mode : String) (module : Lean.Name) : M (Array Lean.Name) := 
   let json ← IO.ofExcept <| Lean.Json.parse stdout
   IO.ofExcept <| Lean.FromJson.fromJson? json
 
+def filterExportTargets (module : Lean.Name) (decls : Array Lean.Name) : M (Array Lean.Name) := do
+  let leanPrefix ← getLeanPrefix
+  let projectDir ← getProjectDir
+  let dotLakeDir := projectDir / ".lake"
+  let queryDeclsPath := (← IO.appPath).parent.getD "" / "query_decls"
+  let whichQueryDecls ←
+    match ← IO.getEnv "COMPARATOR_QUERY_DECLS" with
+    | some path => pure path
+    | none => try pure (← IO.FS.realPath queryDeclsPath).toString catch _ => pure "query_decls"
+  let stdout ← runSandBoxedWithStdout {
+    cmd := whichQueryDecls,
+    args := #["filter-decls", module.toString] ++ decls.map (·.toString),
+    envPass := #["PATH", "HOME", "LEAN_PATH", "LEAN_ABORT_ON_PANIC"]
+    envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
+    readablePaths := #[projectDir, dotLakeDir, whichQueryDecls]
+    writablePaths := #[]
+    executablePaths := #[leanPrefix, whichQueryDecls]
+  }
+  let json ← IO.ofExcept <| Lean.Json.parse stdout
+  IO.ofExcept <| Lean.FromJson.fromJson? json
+
 def safeExport (module : Lean.Name) (decls : Array Lean.Name) (ignoreMissing : Bool := true) : M String := do
+  let decls ← if ignoreMissing then filterExportTargets module decls else pure decls
   IO.println s!"Exporting {decls} from {module}"
 
-  let flagArgs := if ignoreMissing then #["--ignore-missing", module.toString] else #[module.toString]
   let args :=
-    if decls.isEmpty then
-      flagArgs
+    if decls.isEmpty && !ignoreMissing then
+      #[module.toString]
     else
-      decls.foldl (·.push <| ·.toString) (flagArgs.push "--")
+      decls.foldl (·.push <| ·.toString) #[module.toString, "--"]
 
   let leanPrefix ← getLeanPrefix
   let projectDir ← getProjectDir

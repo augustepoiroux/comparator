@@ -2,6 +2,13 @@ import Lean
 
 def main (args : List String) : IO Unit := do
   let mode := args[0]!
+  if mode == "filter-decls" then
+    Lean.initSearchPath (← Lean.findSysroot)
+    let modName := Lean.Syntax.decodeNameLit ("`" ++ args[1]!) |>.getD args[1]!.toName
+    let env ← Lean.importModules #[{ module := modName }] {}
+    let present := args.drop 2 |>.map String.toName |>.filter (env.find? · |>.isSome)
+    IO.println <| Lean.Json.compress <| Lean.ToJson.toJson present.toArray
+    return
   unless mode == "find-sorry-theorems" || mode == "find-sorry-defs" do
     throw <| .userError s!"Unknown query mode: {mode}"
 
