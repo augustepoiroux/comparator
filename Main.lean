@@ -218,7 +218,7 @@ def throwKernelException (ex : Lean.Kernel.Exception) : IO α := do
   throw <| .userError <| ← (ex.toMessageData {}).toString
 
 def addDecl (d : Lean.Declaration) : M Unit := do
-  match (← get).env.addDeclCore 0 0 d none with
+  match (← get).env.addDeclCore 0 d none with
   | .ok env => modify ({ · with env })
   | .error ex => throwKernelException ex
 
@@ -236,12 +236,12 @@ partial def replayConstant (name : Lean.Name) : M Unit := do
           if let some (.thmInfo info') := snapEnv.find? ci.name then
             if info.toConstantVal == info'.toConstantVal && info.all == info'.all then
               return ← modify fun s => { s with pending := s.pending.erase name }
-          if let .error ex := snapEnv.addDeclCore 0 0 (.axiomDecl ⟨info.toConstantVal, false⟩) none then
+          if let .error ex := snapEnv.addDeclCore 0 (.axiomDecl ⟨info.toConstantVal, false⟩) none then
             throwKernelException ex
           match snapEnv.addDeclWithoutChecking (.thmDecl info) with
           | .ok env =>
             let task := Task.spawn fun () =>
-              snapEnv.addDeclCore 0 0 (.thmDecl info) none |>.map fun _ => ()
+              snapEnv.addDeclCore 0 (.thmDecl info) none |>.map fun _ => ()
             modify fun s => { s with env, thmTasks := s.thmTasks.push (name, task) }
           | .error ex => throwKernelException ex
         | .axiomInfo info => addDecl (.axiomDecl info)
