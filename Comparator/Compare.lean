@@ -73,8 +73,7 @@ partial def matchDefn (decl : Lean.Name) (chal sol : Export.ExportedEnv) (e1 e2 
     (aux : Array (Lean.Name × Lean.Name) := #[]) : Option (Array (Lean.Name × Lean.Name)) := do
   match e1, e2 with
   | .app f1 a1, .app f2 a2 => matchDefn decl chal sol a1 a2 (← matchDefn decl chal sol f1 f2 aux)
-  | .lam _ t1 b1 bi1, .lam _ t2 b2 bi2 | .forallE _ t1 b1 bi1, .forallE _ t2 b2 bi2 =>
-    guard (bi1 == bi2)
+  | .lam _ t1 b1 _, .lam _ t2 b2 _ | .forallE _ t1 b1 _, .forallE _ t2 b2 _ =>
     matchDefn decl chal sol b1 b2 (← matchDefn decl chal sol t1 t2 aux)
   | .letE _ t1 v1 b1 _, .letE _ t2 v2 b2 _ =>
     matchDefn decl chal sol b1 b2 (← matchDefn decl chal sol v1 v2 (← matchDefn decl chal sol t1 t2 aux))
