@@ -385,16 +385,33 @@ def runQueryDecls (module : Lean.Name) : M (Array Lean.Name × Array Lean.Name) 
   let json ← IO.ofExcept <| Lean.Json.parse stdout
   IO.ofExcept <| Lean.FromJson.fromJson? json
 
+def filterExportTargets (module : Lean.Name) (decls : Array Lean.Name) : M (Array Lean.Name) := do
+  let leanPrefix ← getLeanPrefix
+  let projectDir ← getProjectDir
+  let dotLakeDir := projectDir / ".lake"
+  let whichQueryDecls ← getWhichQueryDecls
+  let stdout ← runSandBoxedWithStdout {
+    cmd := whichQueryDecls,
+    args := #["filter-decls", module.toString] ++ decls.map (·.toString),
+    envPass := #["PATH", "HOME", "LEAN_PATH", "LEAN_ABORT_ON_PANIC"]
+    envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
+    readablePaths := #[projectDir, dotLakeDir, whichQueryDecls]
+    writablePaths := #[]
+    executablePaths := #[leanPrefix, whichQueryDecls]
+  }
+  let json ← IO.ofExcept <| Lean.Json.parse stdout
+  IO.ofExcept <| Lean.FromJson.fromJson? json
+
 def exportLandrunArgs (module : Lean.Name) (decls : Array Lean.Name) (ignoreMissing : Bool := true)
     (omitThmProofs : Bool := false) : M LandrunArgs := do
+  let decls ← if !omitThmProofs && ignoreMissing then filterExportTargets module decls else pure decls
   IO.println s!"Exporting {decls} from {module}"
 
-  let flagArgs := if ignoreMissing then #["--ignore-missing", module.toString] else #[module.toString]
   let args :=
-    if decls.isEmpty then
-      flagArgs
+    if decls.isEmpty && !ignoreMissing then
+      #[module.toString]
     else
-      decls.foldl (·.push <| ·.toString) (flagArgs.push "--")
+      decls.foldl (·.push <| ·.toString) #[module.toString, "--"]
 
   let leanPrefix ← getLeanPrefix
   let projectDir ← getProjectDir
