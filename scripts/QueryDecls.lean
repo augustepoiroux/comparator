@@ -2,6 +2,14 @@ import Lean
 import Comparator.Util
 
 def main (args : List String) : IO Unit := do
+  if args[0]! == "filter-decls" then
+    Lean.initSearchPath (← Lean.findSysroot)
+    let modName := Lean.Syntax.decodeNameLit ("`" ++ args[1]!) |>.getD args[1]!.toName
+    let env ← Lean.importModules #[{ module := modName }] {}
+    let present := args.drop 2 |>.map String.toName |>.filter (env.find? · |>.isSome)
+    IO.println <| Lean.Json.compress <| Lean.ToJson.toJson present.toArray
+    return
+
   let oleanPath : System.FilePath := args[0]!
   -- Module-system oleans split their data across three files and the *body* of a `public theorem`
   -- lives in the private part, so reading only the main `.olean` would hide `sorryAx`. Key off
