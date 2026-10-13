@@ -204,115 +204,137 @@ where
 
 namespace Replay
 
+/-- Why a declaration is missing from the replayed environment. -/
+inductive Failure where
+  /-- The kernel rejected the declaration itself. -/
+  | kernel (message : String)
+  /-- A dependency was rejected synchronously, so the declaration was never offered to the kernel. -/
+  | dependency (of : Lean.Name)
+  deriving Inhabited
+
 structure State where
   env : Lean.Kernel.Environment
   remaining : Lean.NameSet := {}
   pending : Lean.NameSet := {}
+  /-- Declarations that are not (validly) in `env`. Replay never aborts on a kernel error: it records
+  it here and carries on with everything that does not depend on the rejected declaration, so that
+  every target gets its own verdict. -/
+  failed : Std.HashMap Lean.Name Failure := {}
   postponedConstructors : Lean.NameSet := {}
   postponedRecursors : Lean.NameSet := {}
   thmTasks : Array (Lean.Name × Task (Except Lean.Kernel.Exception Unit)) := #[]
 
 abbrev M := ReaderT (Std.HashMap Lean.Name Lean.ConstantInfo) <| StateRefT State IO
 
-def throwKernelException (ex : Lean.Kernel.Exception) : IO α := do
-  throw <| .userError <| ← (ex.toMessageData {}).toString
+def fail (name : Lean.Name) (failure : Failure) : M Unit :=
+  modify fun s => { s with failed := s.failed.insert name failure, pending := s.pending.erase name }
 
-def addDecl (d : Lean.Declaration) : M Unit := do
+def failKernel (name : Lean.Name) (ex : Lean.Kernel.Exception) : M Unit := do
+  fail name (.kernel (← (ex.toMessageData {}).toString))
+
+def addDecl (name : Lean.Name) (d : Lean.Declaration) : M Unit := do
   match (← get).env.addDeclCore 0 0 d none with
   | .ok env => modify ({ · with env })
-  | .error ex => throwKernelException ex
+  | .error ex => failKernel name ex
 
 partial def replayConstant (name : Lean.Name) : M Unit := do
   if (← get).remaining.contains name then
     modify fun s => { s with remaining := s.remaining.erase name, pending := s.pending.insert name }
     let some ci := (← read)[name]? | unreachable!
-    for n in ci.getUsedConstantsAsSet do replayConstant n
+    let deps := ci.getUsedConstantsAsSet
+    for n in deps do replayConstant n
+    -- A synchronously rejected dependency is absent from `env`, so offering `name` to the kernel could
+    -- only produce a misleading "unknown constant" error. Theorems rejected asynchronously are already
+    -- in `env`; `runBuiltinKernel` attributes those through the dependency closure instead.
+    let failed := (← get).failed
+    if let some d := deps.toList.find? failed.contains then
+      return ← fail name (.dependency d)
     if (← get).pending.contains name then
-      try
-        match ci with
-        | .defnInfo info => addDecl (.defnDecl info)
-        | .thmInfo info =>
-          let snapEnv := (← get).env
-          if let some (.thmInfo info') := snapEnv.find? ci.name then
-            if info.toConstantVal == info'.toConstantVal && info.all == info'.all then
-              return ← modify fun s => { s with pending := s.pending.erase name }
-          if let .error ex := snapEnv.addDeclCore 0 0 (.axiomDecl ⟨info.toConstantVal, false⟩) none then
-            throwKernelException ex
+      match ci with
+      | .defnInfo info => addDecl name (.defnDecl info)
+      | .thmInfo info =>
+        let snapEnv := (← get).env
+        match snapEnv.addDeclCore 0 0 (.axiomDecl ⟨info.toConstantVal, false⟩) none with
+        | .error ex => failKernel name ex
+        | .ok _ =>
           match snapEnv.addDeclWithoutChecking (.thmDecl info) with
+          | .error ex => failKernel name ex
           | .ok env =>
             let task := Task.spawn fun () =>
               snapEnv.addDeclCore 0 0 (.thmDecl info) none |>.map fun _ => ()
             modify fun s => { s with env, thmTasks := s.thmTasks.push (name, task) }
-          | .error ex => throwKernelException ex
-        | .axiomInfo info => addDecl (.axiomDecl info)
-        | .opaqueInfo info => addDecl (.opaqueDecl info)
-        | .inductInfo info =>
-          let all ← info.all.mapM fun n => return (← read)[n]!
-          for o in all do
-            modify fun s => { s with remaining := s.remaining.erase o.name, pending := s.pending.erase o.name }
-          let ctorInfo ← all.mapM fun ci => return (ci, ← ci.inductiveVal!.ctors.mapM fun n => return (← read)[n]!)
-          for (_, ctors) in ctorInfo do
-            for ctor in ctors do
-              for n in ctor.getUsedConstantsAsSet do replayConstant n
-          addDecl (.inductDecl info.levelParams info.numParams (ctorInfo.map fun ⟨ci, ctors⟩ =>
-            { name := ci.name, type := ci.type, ctors := ctors.map fun c => { name := c.name, type := c.type } }) false)
-        | .ctorInfo info => modify fun s => { s with postponedConstructors := s.postponedConstructors.insert info.name }
-        | .recInfo info => modify fun s => { s with postponedRecursors := s.postponedRecursors.insert info.name }
-        | .quotInfo _ => replayConstant `Eq; addDecl .quotDecl
-        modify fun s => { s with pending := s.pending.erase name }
-      catch ex => throw <| .userError s!"while replaying declaration '{name}':\n{ex}"
+      | .axiomInfo info => addDecl name (.axiomDecl info)
+      | .opaqueInfo info => addDecl name (.opaqueDecl info)
+      | .inductInfo info =>
+        let all ← info.all.mapM fun n => return (← read)[n]!
+        for o in all do
+          modify fun s => { s with remaining := s.remaining.erase o.name, pending := s.pending.erase o.name }
+        let ctorInfo ← all.mapM fun ci => return (ci, ← ci.inductiveVal!.ctors.mapM fun n => return (← read)[n]!)
+        for (_, ctors) in ctorInfo do
+          for ctor in ctors do
+            for n in ctor.getUsedConstantsAsSet do replayConstant n
+        addDecl name (.inductDecl info.levelParams info.numParams (ctorInfo.map fun ⟨ci, ctors⟩ =>
+          { name := ci.name, type := ci.type, ctors := ctors.map fun c => { name := c.name, type := c.type } }) false)
+        -- The whole block stands or falls together.
+        if let some failure := (← get).failed[name]? then
+          for o in all do fail o.name failure
+      | .ctorInfo info => modify fun s => { s with postponedConstructors := s.postponedConstructors.insert info.name }
+      | .recInfo info => modify fun s => { s with postponedRecursors := s.postponedRecursors.insert info.name }
+      | .quotInfo _ => replayConstant `Eq; addDecl name .quotDecl
+      modify fun s => { s with pending := s.pending.erase name }
 
+/-- Replays `newConstants` into `env`. Returns the final environment together with every declaration
+that is not validly in it and why. -/
 def replay (newConstants : Std.HashMap Lean.Name Lean.ConstantInfo) (env : Lean.Kernel.Environment) :
-    IO Lean.Kernel.Environment := do
+    IO (Lean.Kernel.Environment × Std.HashMap Lean.Name Failure) := do
   let remaining := newConstants.fold (init := (∅ : Lean.NameSet)) fun acc n ci =>
     if !ci.isUnsafe && !ci.isPartial then acc.insert n else acc
   let (_, s) ← StateRefT'.run (s := { env, remaining }) <| ReaderT.run (r := newConstants) do
     for n in #[``Nat, ``Char.ofNat, ``String.ofList] do replayConstant n
     for n in remaining do replayConstant n
-    for ctor in (← get).postponedConstructors do
-      match (← get).env.find? ctor, (← read)[ctor]? with
-      | some (.ctorInfo i), some (.ctorInfo i') => unless i == i' do throw <| .userError s!"Invalid constructor {ctor}"
-      | _, _ => throw <| .userError s!"No such constructor {ctor}"
-    for rec in (← get).postponedRecursors do
-      match (← get).env.find? rec, (← read)[rec]? with
-      | some (.recInfo i), some (.recInfo i') => unless i == i' do throw <| .userError s!"Invalid recursor {rec}"
-      | _, _ => throw <| .userError s!"No such recursor {rec}"
     for (name, task) in (← get).thmTasks do
-      if let .error ex := task.get then
-        try throwKernelException ex
-        catch ex => throw <| .userError s!"while replaying declaration '{name}':\n{ex}"
-  return s.env
+      if let .error ex := task.get then failKernel name ex
+    -- Constructors and recursors are generated by the kernel from the inductive declaration; they must
+    -- agree with the export unless their inductive type was rejected.
+    for ctor in (← get).postponedConstructors do
+      let some (.ctorInfo i') := (← read)[ctor]? | unreachable!
+      match (← get).env.find? ctor, (← get).failed[i'.induct]? with
+      | _, some failure => fail ctor failure
+      | some (.ctorInfo i), none => unless i == i' do fail ctor (.kernel s!"Invalid constructor {ctor}")
+      | _, none => fail ctor (.kernel s!"No such constructor {ctor}")
+    for rec in (← get).postponedRecursors do
+      let some (.recInfo i') := (← read)[rec]? | unreachable!
+      let failed := (← get).failed
+      match (← get).env.find? rec, i'.all.findSome? (failed[·]?) with
+      | _, some failure => fail rec failure
+      | some (.recInfo i), none => unless i == i' do fail rec (.kernel s!"Invalid recursor {rec}")
+      | _, none => fail rec (.kernel s!"No such recursor {rec}")
+  return (s.env, s.failed)
 
 end Replay
 
-def runBuiltinKernel (solution : Export.ExportedEnv) (targets : Array Lean.Name := #[]) : M (Option String) := do
+/-- Replays the solution into a fresh kernel environment. Returns a global error (nothing can be trusted)
+or the declarations that are not validly in the final environment; see `kernelRejections`. -/
+def runBuiltinKernel (solution : Export.ExportedEnv) (targets : Array Lean.Name := #[]) :
+    M (Except String (Std.HashMap Lean.Name Replay.Failure)) := do
   IO.println "Running Lean default kernel on solution."
   let env ← Lean.mkEmptyEnvironment
-  let mut kernelEnv := env.toKernelEnv
   let origConstMap := solution.constMap
   -- Lean's kernel interprets just the addition of `Quot as adding all of these so adding them
   -- multiple times leads to errors.
   let quotTargets := [`Quot.mk, `Quot.lift, `Quot.ind]
   let kernelConstMap := quotTargets.foldl (init := origConstMap) (·.erase ·)
-  try
-    kernelEnv ← Replay.replay kernelConstMap kernelEnv
-    IO.println "Lean default kernel accepts the solution"
-  catch e =>
-    IO.println "Lean default kernel rejects the solution"
-    return some e.toString
+  let (kernelEnv, failed) ← Replay.replay kernelConstMap env.toKernelEnv
 
-  try
-    -- Replay can skip a constant without throwing, so check every exported constant against the
-    -- final env. `Quot*` and `targets` come first only to keep the error message stable. The
-    -- filter is for `Quot*` only; `compareIt` asserts `targets` are present.
-    let verifyTargets := #[`Quot] ++ quotTargets.toArray ++ targets ++ origConstMap.keysArray
-    for name in verifyTargets.filter origConstMap.contains do
-      if kernelEnv.find? name != origConstMap[name]? then
-        throw <| .userError s!"Constant mismatch in final kernel env on: {name}"
-    return none
-  catch e =>
-    IO.println "Quotient post-check rejects the solution"
-    return some e.toString
+  -- Every exported constant must be either bit-identical in the final env or recorded as rejected;
+  -- anything else means the replay did not do what we think it did, so nothing can be trusted.
+  -- `Quot*` and `targets` come first only to keep the error message stable.
+  let verifyTargets := #[`Quot] ++ quotTargets.toArray ++ targets ++ origConstMap.keysArray
+  for name in verifyTargets.filter origConstMap.contains do
+    if !failed.contains name && kernelEnv.find? name != origConstMap[name]? then
+      IO.println "Lean default kernel post-check rejects the solution"
+      return .error s!"Constant mismatch in final kernel env on: {name}"
+  return .ok failed
 
 def primitiveTargets : M (Array Lean.Name) := do
   -- The challenge needs to have all the built-in constants of the kernel, as the
@@ -502,6 +524,14 @@ inductive CheckFailure where
   | defnCheck
   | axioms
   | notFound
+  /-- The target passed the statement and axiom checks, but `kernel` (`lean`, or an entry of
+  `external_kernels`) rejected it. For `lean` this is per target and `message` names the rejected
+  declaration, which may be a dependency shared with other targets; external kernels only report a
+  verdict for the whole solution, so a rejection marks every target that was still accepted. -/
+  | kernel (kernel message : String)
+  /-- The re-export restricted to the accepted targets disagreed with the checked export. Marks every
+  target that was still accepted. -/
+  | reexport (message : String)
   deriving Lean.ToJson, Inhabited, Repr
 
 structure Info where
@@ -515,7 +545,33 @@ structure VerificationOutcome where
   failureMode : Option CheckFailure
   mode : Option TheoremMode := none
   solutionName : Option Lean.Name := none
-  deriving Lean.ToJson, Inhabited
+  deriving Inhabited
+
+/-- Like the derived instance, plus `verified`: the attempt passed every phase, including the kernel
+replay. Reports are only written after that phase (or with every clean attempt marked), so this is exactly
+`failureMode == none`. -/
+instance : Lean.ToJson VerificationOutcome where
+  toJson o := Lean.Json.mkObj [
+    ("verified", o.failureMode.isNone), ("targetInfo", Lean.toJson o.targetInfo),
+    ("solutionInfo", Lean.toJson o.solutionInfo), ("failureMode", Lean.toJson o.failureMode),
+    ("mode", Lean.toJson o.mode), ("solutionName", Lean.toJson o.solutionName)]
+
+/-- The JSON verification report written to `json_output_path`. `accepted` is `true` if and only if the
+run succeeded; it is the only success signal, since with `must_resolve_all_sorries: false` an accepted
+run may contain failed targets and a rejected run may contain verified ones. `error` is the message the
+run was rejected with. -/
+structure Report where
+  accepted : Bool
+  error : Option String := none
+  outcomes : Array (Lean.Name × VerificationOutcome) := #[]
+  deriving Lean.ToJson
+
+def writeReport (report : Report) : M Unit := do
+  let some path ← getJsonOutputPath | return
+  -- Atomic, so a consumer can never observe a partially written report.
+  let tmp := path ++ ".tmp"
+  IO.FS.writeFile tmp (Lean.Json.compress (Lean.ToJson.toJson report))
+  IO.FS.rename tmp path
 
 def disproofName (n : Lean.Name) : Lean.Name := n ++ `disproof
 
@@ -544,7 +600,7 @@ abbrev VerifyM := StateRefT VerifyState M
 
 def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.Name)
     (solutionName : Lean.Name) (mode : TheoremMode) (targetInfo : Info) (definitionNames : Array Lean.Name) :
-    VerifyM (Bool × VerificationOutcome) := do
+    VerifyM VerificationOutcome := do
   let legalAxioms ← getLegalAxioms
   let sInfo := (← getInfo solution solutionName).get!
   let defsToCompare := if definitionNames.isEmpty then #[] else
@@ -553,49 +609,41 @@ def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.
 
   let typeFailureMode : CheckFailure := match mode with | .direct => .thmType | .disproof => .disproofType
 
-  let (accepted, fail) ←
+  let fail ←
     match Comparator.compareAt challenge solution #[t] defsToCompare #[] (mode == .disproof) (← get).compareChecked with
     | .error e =>
       IO.println s!"Verification failed for {solutionName}: {e}"
-      pure (false, some typeFailureMode)
+      pure (some typeFailureMode)
     | .ok compareChecked =>
       modify ({ · with compareChecked })
       match Comparator.checkAxioms solution #[solutionName] defsToCompare legalAxioms (← get).axiomChecked with
-      | .error e => IO.println s!"Axiom check failed for {solutionName}: {e}"; pure (false, some .axioms)
+      | .error e => IO.println s!"Axiom check failed for {solutionName}: {e}"; pure (some .axioms)
       | .ok axiomChecked =>
         modify ({ · with axiomChecked })
-        pure (true, none)
+        pure none
 
-  let outcome := ⟨targetInfo, some sInfo, fail, some mode, some solutionName⟩
-  return (accepted, outcome)
+  return ⟨targetInfo, some sInfo, fail, some mode, some solutionName⟩
 
 def verifyTheorem (challenge solution : Export.ExportedEnv) (t : Lean.Name) (definitionNames : Array Lean.Name) :
-    VerifyM (Array Lean.Name × Array (Lean.Name × VerificationOutcome)) := do
+    VerifyM (Array (Lean.Name × VerificationOutcome)) := do
   let allowDisproofs ← getAllowDisproofs
   let targetInfo := (← getInfo challenge t).getD ⟨.axiomInfo ⟨⟨t, [], .sort .zero⟩, false⟩, #[]⟩
   let directInfo := solution.constMap[t]?
   let dname := disproofName t
   let disproofInfo := if allowDisproofs then solution.constMap[dname]? else none
 
-  let mut acceptedNames := #[]
   let mut outcomes := #[]
 
   if let some _ := directInfo then
-    let (accepted, outcome) ← verifyOneTheoremAttempt challenge solution t t .direct targetInfo definitionNames
-    if accepted then
-      acceptedNames := acceptedNames.push t
-    outcomes := outcomes.push (t, outcome)
+    outcomes := outcomes.push (t, ← verifyOneTheoremAttempt challenge solution t t .direct targetInfo definitionNames)
 
   if let some _ := disproofInfo then
-    let (accepted, outcome) ← verifyOneTheoremAttempt challenge solution t dname .disproof targetInfo definitionNames
-    if accepted then
-      acceptedNames := acceptedNames.push dname
-    outcomes := outcomes.push (t, outcome)
+    outcomes := outcomes.push (t, ← verifyOneTheoremAttempt challenge solution t dname .disproof targetInfo definitionNames)
 
   if directInfo.isNone && disproofInfo.isNone then
     outcomes := outcomes.push (t, ⟨targetInfo, none, some .notFound, none, none⟩)
 
-  return (acceptedNames, outcomes)
+  return outcomes
 
 def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) (definitionNames : Array Lean.Name) :
     VerifyM VerificationOutcome := do
@@ -627,61 +675,96 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) (
 
   return ⟨targetInfo, some sInfo, fail, none, some d⟩
 
-def throwFailures (header : String) (failures : Array (Lean.Name × VerificationOutcome)) : M α := do
-  let mut msg := header
-  for (n, outcome) in failures do
-    msg := msg ++ s!"- {n}: {outcome.failureMode.map repr}\n"
-  throw <| .userError msg
+/-!
+The verdict is derived from `outcomes` alone, so that the same rules apply before and after the kernel
+phase. Theorem attempts carry `mode := some _`; definition outcomes carry `mode := none`.
+-/
 
+/-- Solution names (`t` or `t.disproof`) of the theorem attempts that have not failed. -/
+def acceptedTheoremNames (outcomes : Array (Lean.Name × VerificationOutcome)) : Array Lean.Name :=
+  outcomes.filterMap fun (_, o) => if o.mode.isSome && o.failureMode.isNone then o.solutionName else none
+
+/-- Theorem targets without an accepted attempt, with all of their attempts. -/
+def theoremFailures (outcomes : Array (Lean.Name × VerificationOutcome)) (theoremNames : Array Lean.Name) :
+    Array (Lean.Name × VerificationOutcome) :=
+  theoremNames.flatMap fun t =>
+    let attempts := outcomes.filter (·.1 == t)
+    if attempts.any (·.2.failureMode.isNone) then #[] else attempts
+
+def definitionFailures (outcomes : Array (Lean.Name × VerificationOutcome)) (definitionNames : Array Lean.Name) :
+    Array (Lean.Name × VerificationOutcome) :=
+  outcomes.filter fun (d, o) => definitionNames.contains d && o.failureMode.isSome
+
+/-- The acceptance rules: definition targets are mandatory, at least one theorem target must be accepted,
+and with `must_resolve_all_sorries` all of them must be. Returns the message to reject with, if any. -/
+def rejection (outcomes : Array (Lean.Name × VerificationOutcome)) (theoremNames definitionNames : Array Lean.Name)
+    (mustResolveAllSorries : Bool) : Option String :=
+  let fmt (header : String) (failures : Array (Lean.Name × VerificationOutcome)) : String :=
+    failures.foldl (init := header) fun msg (n, outcome) => msg ++ s!"- {n}: {outcome.failureMode.map repr}\n"
+  let defFailures := definitionFailures outcomes definitionNames
+  let thmFailures := theoremFailures outcomes theoremNames
+  if !defFailures.isEmpty then
+    some <| fmt "Some definition targets failed:\n" defFailures
+  else if (acceptedTheoremNames outcomes).isEmpty && !theoremNames.isEmpty then
+    some <| fmt "All verification targets failed:\n" thmFailures
+  else if !thmFailures.isEmpty && mustResolveAllSorries then
+    some <| fmt "Some verification targets failed:\n" thmFailures
+  else
+    none
+
+/-- Marks every outcome that has not failed yet and for which `failure` gives a mode. -/
+def mark (outcomes : Array (Lean.Name × VerificationOutcome)) (failure : VerificationOutcome → Option CheckFailure) :
+    Array (Lean.Name × VerificationOutcome) :=
+  outcomes.map fun (n, o) => (n, if o.failureMode.isNone then { o with failureMode := failure o } else o)
+
+/-- The per-target verdicts of the Lean kernel: a target is rejected if any declaration in its dependency
+closure is not validly in the replayed environment, with the kernel's message for the first rejected one
+in export order (the target itself, or a dependency it may share with other targets). -/
+def kernelRejections (solution : Export.ExportedEnv) (failed : Std.HashMap Lean.Name Replay.Failure)
+    (targets : Array Lean.Name) : M (Std.HashMap Lean.Name String) := do
+  let mut rejected := {}
+  for t in targets do
+    let (_, closure) := (collectDeps solution t).run {}
+    let inClosure := solution.constOrder.filter fun c => closure.contains c && failed.contains c
+    let root := inClosure.find? (failed[·]? matches some (.kernel _)) <|> inClosure[0]?
+    if let some r := root then
+      let msg := match failed[r]! with
+        | .kernel msg => msg
+        | .dependency d => s!"was not checked because '{d}' was rejected"
+      let msg := if r == t then msg else s!"depends on '{r}', which the kernel rejected:\n{msg}"
+      IO.println s!"Lean default kernel rejects '{t}':\n{msg}"
+      rejected := rejected.insert t msg
+  IO.println s!"Lean default kernel {if rejected.isEmpty then "accepts" else "rejects"} the solution"
+  return rejected
+
+def reject (outcomes : Array (Lean.Name × VerificationOutcome)) (error : String) : M α := do
+  writeReport { accepted := false, error, outcomes }
+  throw <| .userError error
+
+def accept (outcomes : Array (Lean.Name × VerificationOutcome)) (theoremNames : Array Lean.Name) : M Unit := do
+  writeReport { accepted := true, outcomes }
+  let thmFailures := theoremFailures outcomes theoremNames
+  if !thmFailures.isEmpty then
+    IO.println "Warnings/Diagnostics for unsolved/failed theorems:"
+    for (t, outcome) in thmFailures do
+      IO.println s!"WARNING: Theorem '{t}' remained unsolved: {outcome.failureMode.map repr}"
+  IO.println "Your solution is okay!"
+
+/-- Statement and axiom checks for every target. The kernel has not been consulted yet. -/
 def verifyMatch (challenge solution : Export.ExportedEnv) (theoremNames : Array Lean.Name)
-    (definitionNames : Array Lean.Name) (allowPartialTheoremFailures : Bool) :
-    M (Array Lean.Name) := (StateRefT'.run' · {}) do
+    (definitionNames : Array Lean.Name) : M (Array (Lean.Name × VerificationOutcome)) := (StateRefT'.run' · {}) do
   let primTargets ← primitiveTargets
   let legalAxioms ← getLegalAxioms
-  let mustResolveAllSorries ← getMustResolveAllSorries
   let quotTargets := if legalAxioms.contains ``Quot.sound then #[``Quot, ``Quot.mk, ``Quot.lift, ``Quot.ind] else #[]
   let compareChecked ← IO.ofExcept <| Comparator.compareAt challenge solution legalAxioms #[] (primTargets ++ quotTargets)
   modify ({ · with compareChecked })
 
   let mut outcomes : Array (Lean.Name × VerificationOutcome) := #[]
-  let mut acceptedTheorems := #[]
-  let mut theoremFailures := #[]
-  let mut definitionFailures := #[]
-
   for t in theoremNames do
-    let (acceptedActualNames, theoremOutcomes) ← verifyTheorem challenge solution t definitionNames
-    outcomes := outcomes ++ theoremOutcomes
-    for actual in acceptedActualNames do
-      acceptedTheorems := acceptedTheorems.push actual
-    if acceptedActualNames.isEmpty then
-      for (_, outcome) in theoremOutcomes do
-        theoremFailures := theoremFailures.push (t, outcome)
-
+    outcomes := outcomes ++ (← verifyTheorem challenge solution t definitionNames)
   for d in definitionNames do
-    let outcome ← verifyDefinition challenge solution d definitionNames
-    outcomes := outcomes.push (d, outcome)
-    if outcome.failureMode.isSome then
-      definitionFailures := definitionFailures.push (d, outcome)
-
-  if let some jsonPath ← getJsonOutputPath then
-    let jsonOutput := Lean.ToJson.toJson outcomes
-    IO.FS.writeFile jsonPath (Lean.Json.compress jsonOutput)
-
-  if !definitionFailures.isEmpty then
-    throwFailures "Some definition targets failed:\n" definitionFailures
-
-  if acceptedTheorems.isEmpty && !theoremNames.isEmpty then
-    throwFailures "All verification targets failed:\n" theoremFailures
-
-  if !theoremFailures.isEmpty then
-    if mustResolveAllSorries || !allowPartialTheoremFailures then
-      throwFailures "Some verification targets failed:\n" theoremFailures
-    else
-      IO.println "Warnings/Diagnostics for unsolved/failed theorems:"
-      for (t, outcome) in theoremFailures do
-        IO.println s!"WARNING: Theorem '{t}' remained unsolved: {outcome.failureMode.map repr}"
-
-  return acceptedTheorems
+    outcomes := outcomes.push (d, ← verifyDefinition challenge solution d definitionNames)
+  return outcomes
 
 
 def getTargets (theorems : Array Lean.Name) (definitions : Array Lean.Name) : M (Array Lean.Name) := do
@@ -689,6 +772,11 @@ def getTargets (theorems : Array Lean.Name) (definitions : Array Lean.Name) : M 
 
 def compareIt (exportPath importPath : Option String := none) : M Unit := do
   let challengeModule ← getChallengeModule
+
+  -- Replace any stale report first: whatever happens from here on, a report that exists is either the
+  -- final verdict or marks an incomplete run.
+  if exportPath.isNone then
+    writeReport { accepted := false, error := some "Verification did not complete" }
 
   if importPath.isNone then
     safeLakeBuild challengeModule
@@ -737,36 +825,51 @@ def compareIt (exportPath importPath : Option String := none) : M Unit := do
   safeLakeBuild solutionModule
   let (solutionExport, initialSolution) ← exportSolution solutionModule initialSolutionExportTargets
 
-  let allowPartialTheoremFailures := !(← getMustResolveAllSorries)
-  let acceptedTheorems ← verifyMatch challenge initialSolution theoremNames definitionNames allowPartialTheoremFailures
+  let mustResolveAllSorries ← getMustResolveAllSorries
+  let mut outcomes ← verifyMatch challenge initialSolution theoremNames definitionNames
+  -- Every target that passed the statement and axiom checks is replayed, even if the run is already bound
+  -- to be rejected, so that an outcome without a failure always means "verified by the kernel".
+  let acceptedTheorems := acceptedTheoremNames outcomes
+  let acceptedDefinitions := definitionNames.filter fun d => outcomes.any fun (n, o) => n == d && o.failureMode.isNone
+  let acceptedTargets := acceptedTheorems ++ acceptedDefinitions
+  if !acceptedTargets.isEmpty then
+    let presentInitialTargets := initialSolutionExportTargets.filter (initialSolution.constMap.contains ·)
+    let verifiedTargets ← getTargets acceptedTheorems acceptedDefinitions
+    let presentVerifiedTargets := verifiedTargets.filter (initialSolution.constMap.contains ·)
+    let (verifiedSolutionExport, verifiedSolution) ← try
+        let verified ←
+          if Std.HashSet.ofArray presentInitialTargets == Std.HashSet.ofArray presentVerifiedTargets then
+            pure (solutionExport, initialSolution)
+          else
+            let (vExport, vSol) ← exportSolution solutionModule verifiedTargets
+            for (k, v) in vSol.constMap do
+              if initialSolution.constMap[k]? != some v then
+                throw <| IO.userError s!"Verified solution export differs from the checked export on '{k}'"
+            pure (vExport, vSol)
+        for t in acceptedTargets do
+          if !verified.2.constMap.contains t then
+            throw <| IO.userError s!"Verified solution export is missing accepted target '{t}'"
+        pure verified
+      catch e => reject (mark outcomes fun _ => some (.reexport e.toString)) e.toString
 
-  let presentInitialTargets := initialSolutionExportTargets.filter (initialSolution.constMap.contains ·)
-  let verifiedTargets ← getTargets acceptedTheorems definitionNames
-  let presentVerifiedTargets := verifiedTargets.filter (initialSolution.constMap.contains ·)
-  let (verifiedSolutionExport, verifiedSolution) ←
-    if Std.HashSet.ofArray presentInitialTargets == Std.HashSet.ofArray presentVerifiedTargets then
-      pure (solutionExport, initialSolution)
-    else
-      let (vExport, vSol) ← exportSolution solutionModule verifiedTargets
-      for (k, v) in vSol.constMap do
-        if initialSolution.constMap[k]? != some v then
-          throw <| IO.userError s!"Verified solution export differs from the checked export on '{k}'"
-      pure (vExport, vSol)
+    -- External kernels only give a verdict for the whole solution; all of them run, the first rejection wins.
+    let mut externalFailure : Option (String × String) := none
+    for (kernelName, kernelCommand) in ← getExternalKernels do
+      if let some error ← runExternalKernel kernelName kernelCommand verifiedSolutionExport then
+        externalFailure := externalFailure <|> some (kernelName, error)
 
-  for t in acceptedTheorems ++ definitionNames do
-    if !verifiedSolution.constMap.contains t then
-      throw <| IO.userError s!"Verified solution export is missing accepted target '{t}'"
+    let failed ← match ← runBuiltinKernel verifiedSolution acceptedTargets with
+      | .error error => reject (mark outcomes fun _ => some (.kernel "lean" error)) error
+      | .ok failed => pure failed
+    let rejected ← kernelRejections verifiedSolution failed acceptedTargets
+    outcomes := mark outcomes fun o => o.solutionName >>= (rejected[·]?) |>.map (.kernel "lean" ·)
 
-  let mut result := none
-  for (kernelName, kernelCommand) in ← getExternalKernels do
-    result := result <|> (← runExternalKernel kernelName kernelCommand verifiedSolutionExport)
+    if let some (kernelName, error) := externalFailure then
+      reject (mark outcomes fun _ => some (.kernel kernelName error)) error
 
-  result := result <|> (← runBuiltinKernel verifiedSolution (acceptedTheorems ++ definitionNames))
-
-  if let some error := result then
-    throw <| IO.userError error
-
-  IO.println "Your solution is okay!"
+  if let some error := rejection outcomes theoremNames definitionNames mustResolveAllSorries then
+    reject outcomes error
+  accept outcomes theoremNames
 
 structure Config where
   challenge_module : String

@@ -1,0 +1,93 @@
+{
+    "exit_code": 1,
+    "expected_output": [
+        "Lean default kernel rejects 't1':\ndepends on 'h', which the kernel rejected:",
+        "Lean default kernel rejects 't2':\ndepends on 'h', which the kernel rejected:",
+        "Some verification targets failed:"
+    ],
+    "expected_json_output": {
+        "accepted": false,
+        "error": "Some verification targets failed:\n- t1: (some (Comparator.CheckFailure.kernel*",
+        "outcomes": [
+            [
+                "t1",
+                {
+                    "verified": false,
+                    "targetInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": [
+                            "sorryAx"
+                        ]
+                    },
+                    "solutionInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": []
+                    },
+                    "failureMode": {
+                        "kernel": {
+                            "kernel": "lean",
+                            "message": "depends on 'h', which the kernel rejected:\n(kernel) declaration type mismatch, 'h' has type*"
+                        }
+                    },
+                    "mode": "direct",
+                    "solutionName": "t1"
+                }
+            ],
+            [
+                "t2",
+                {
+                    "verified": false,
+                    "targetInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": [
+                            "sorryAx"
+                        ]
+                    },
+                    "solutionInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": []
+                    },
+                    "failureMode": {
+                        "kernel": {
+                            "kernel": "lean",
+                            "message": "depends on 'h', which the kernel rejected:\n(kernel) declaration type mismatch, 'h' has type*"
+                        }
+                    },
+                    "mode": "direct",
+                    "solutionName": "t2"
+                }
+            ],
+            [
+                "t3",
+                {
+                    "verified": true,
+                    "targetInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": [
+                            "sorryAx"
+                        ]
+                    },
+                    "solutionInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": []
+                    },
+                    "failureMode": null,
+                    "mode": "direct",
+                    "solutionName": "t3"
+                }
+            ]
+        ]
+    }
+}

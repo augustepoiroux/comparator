@@ -1,0 +1,42 @@
+{
+    "exit_code": 1,
+    "expected_output": [
+        "Lean default kernel rejects 't':",
+        "(kernel) declaration type mismatch, 't' has type",
+        "All verification targets failed:"
+    ],
+    "expected_json_output": {
+        "accepted": false,
+        "error": "All verification targets failed:\n- t: (some (Comparator.CheckFailure.kernel*",
+        "outcomes": [
+            [
+                "t",
+                {
+                    "verified": false,
+                    "targetInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": [
+                            "sorryAx"
+                        ]
+                    },
+                    "solutionInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": []
+                    },
+                    "failureMode": {
+                        "kernel": {
+                            "kernel": "lean",
+                            "message": "(kernel) declaration type mismatch, 't' has type*"
+                        }
+                    },
+                    "mode": "direct",
+                    "solutionName": "t"
+                }
+            ]
+        ]
+    }
+}

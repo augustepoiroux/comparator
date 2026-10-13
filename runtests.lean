@@ -78,6 +78,17 @@ def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) : IO (
   }
   pure (out.exitCode.toNat, out.stdout ++ "\n" ++ out.stderr)
 
+/-- `expected` matches `actual` structurally, except that an expected string ending in `*` matches any
+actual string with that prefix (used for kernel messages, whose pretty-printed terms are not part of
+the contract and change between Lean versions). -/
+partial def jsonMatches (expected actual : Json) : Bool :=
+  match expected, actual with
+  | .str e, .str a => if e.endsWith "*" then a.startsWith (e.dropEnd 1).toString else e == a
+  | .obj e, .obj a =>
+    e.size == a.size && e.all fun k v => match a.get? k with | some v' => jsonMatches v v' | none => false
+  | .arr e, .arr a => e.size == a.size && (e.zip a).all fun (x, y) => jsonMatches x y
+  | e, a => e == a
+
 def readTestConfig (configPath : FilePath) : IO TestConfig := do
   let content ← IO.FS.readFile configPath
   match Lean.Json.parse content with
@@ -161,7 +172,7 @@ def runTestProject (projectPath : FilePath) (projectName : String) (repoDir : Fi
           return TestResult.error projectName s!"json_output_path file '{jsonOutputPath}' contains invalid JSON: {e}"
         | .ok outputJson =>
           if let some expectedJson := config.expected_json_output then
-            if outputJson != expectedJson then
+            if !jsonMatches expectedJson outputJson then
               IO.FS.removeDirAll tempDir
               return TestResult.error projectName s!"JSON mismatch.\nExpected: {expectedJson}\nGot: {outputJson}"
 

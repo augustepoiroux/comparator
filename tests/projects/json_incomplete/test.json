@@ -1,0 +1,8 @@
+{
+    "exit_code": 1,
+    "expected_json_output": {
+        "accepted": false,
+        "error": "Verification did not complete",
+        "outcomes": []
+    }
+}

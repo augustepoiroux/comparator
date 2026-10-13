@@ -1,0 +1,65 @@
+{
+    "exit_code": 0,
+    "expected_output": [
+        "Lean default kernel rejects 't2':",
+        "WARNING: Theorem 't2' remained unsolved: (some (Comparator.CheckFailure.kernel",
+        "Your solution is okay!"
+    ],
+    "expected_json_output": {
+        "accepted": true,
+        "error": null,
+        "outcomes": [
+            [
+                "t1",
+                {
+                    "verified": true,
+                    "targetInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": [
+                            "sorryAx"
+                        ]
+                    },
+                    "solutionInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": []
+                    },
+                    "failureMode": null,
+                    "mode": "direct",
+                    "solutionName": "t1"
+                }
+            ],
+            [
+                "t2",
+                {
+                    "verified": false,
+                    "targetInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": [
+                            "sorryAx"
+                        ]
+                    },
+                    "solutionInfo": {
+                        "constInfo": {
+                            "kind": "theorem"
+                        },
+                        "axioms": []
+                    },
+                    "failureMode": {
+                        "kernel": {
+                            "kernel": "lean",
+                            "message": "(kernel) declaration type mismatch, 't2' has type*"
+                        }
+                    },
+                    "mode": "direct",
+                    "solutionName": "t2"
+                }
+            ]
+        ]
+    }
+}

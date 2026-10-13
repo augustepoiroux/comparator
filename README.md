@@ -34,7 +34,7 @@ The following optional configuration fields control target selection and reporti
 - `must_resolve_all_sorries`: defaults to `true`. When `false`, failed theorem targets are reported as
   warnings and a submission is accepted if at least one theorem target succeeds. Definition targets
   remain mandatory.
-- `json_output_path`: writes a JSON verification report to the given path.
+- `json_output_path`: writes a JSON verification report to the given path (see [JSON report](#json-report)).
 
 If and only if both `theorem_names` and `definition_names` are omitted, comparator discovers targets
 automatically. It selects theorems and reducible definitions declared in the challenge whose values
@@ -68,6 +68,30 @@ Every theorem target accepted from `Solution` is guaranteed to:
 With the default `must_resolve_all_sorries: true`, a successful comparator run means that every selected
 theorem target was accepted. With `must_resolve_all_sorries: false`, inspect the warnings or JSON report
 to determine which theorem targets were accepted.
+
+### JSON report
+
+With `json_output_path`, comparator writes a report of the form
+```
+{
+  "accepted": false,
+  "error": "Some verification targets failed:\n- t2: (some (Comparator.CheckFailure.kernel \"lean\" \"...\"))\n",
+  "outcomes": [["t1", {"failureMode": null, "mode": "direct", "solutionName": "t1", ...}],
+               ["t2", {"failureMode": {"kernel": {"kernel": "lean", "message": "..."}}, ...}]]
+}
+```
+- `accepted` is `true` if and only if the run succeeded (exit code `0`). It is the only success signal:
+  with `must_resolve_all_sorries: false` an accepted run may contain failed targets, and a rejected run
+  may contain fully verified ones.
+- `outcomes` has one entry per verification attempt, keyed by target name (a theorem target with both a
+  direct proof and a `.disproof` has two). `failureMode: null` means the attempt passed every phase,
+  including the kernel replay. The kernel phase is reported per target: `kernel` with `"lean"` carries the
+  kernel's message for the target itself or for the first rejected declaration in its dependency closure,
+  so a bogus shared helper marks every target that uses it and no other. Failures that cannot be attributed
+  to a target (`reexport`, a rejection by one of the `external_kernels`) mark every target that was still
+  accepted.
+- The file is written atomically, and a placeholder with `accepted: false` is written as soon as
+  comparator starts, so a stale or partial report can never be mistaken for a success.
 
 > [!NOTE]
 > The Trusted Code Base of Landrun naturally includes the operating system and hardware it is running on, plus its sandboxing mechanism.

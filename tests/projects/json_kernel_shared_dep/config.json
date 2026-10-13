@@ -1,0 +1,1 @@
+{"challenge_module":"Challenge","solution_module":"Solution","theorem_names":["t1","t2","t3"],"permitted_axioms":["propext","Quot.sound","Classical.choice"],"json_output_path":"report.json"}
