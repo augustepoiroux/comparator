@@ -1,5 +1,6 @@
 import Lean
 import Export
+import Comparator.Util
 
 open Lean
 
@@ -10,7 +11,7 @@ partial def collectAxiomsCached (env : Environment)
   let addAx (axs : Array Name) (ax : Name) : Array Name := if axs.contains ax then axs else axs.push ax
   let collectExpr (axs : Array Name) (e : Expr) : IO (Array Name) := do
     let mut axs := axs
-    for d in e.getUsedConstants do
+    for d in Comparator.getUsedConstants e do
       for ax in ← collectAxiomsCached env cache d do axs := addAx axs ax
     return axs
   let mut axs : Array Name := #[]
@@ -41,7 +42,7 @@ partial def dumpConstantOmitProofs (axiomCache : IO.Ref (Std.HashMap Name (Array
   let some declar := env.find? c | return
   if ((declar.isUnsafe || declar.isPartial) && !(← get).exportUnsafe) || (← get).visitedConstants.contains c then
     return
-  let dumpDeps (e : Expr) : M Unit := e.getUsedConstants.forM (dumpConstantOmitProofs axiomCache)
+  let dumpDeps (e : Expr) : M Unit := (Comparator.getUsedConstants e).forM (dumpConstantOmitProofs axiomCache)
   match declar with
   | .thmInfo val =>
     modify fun st => { st with visitedConstants := st.visitedConstants.insert c }
@@ -153,8 +154,8 @@ def main (args : List String) : IO Unit := do
   let mut reaches : Std.HashSet Lean.Name := {}
   let mut queue : Array Lean.Name := #[]
   for (n, ci) in consts do
-    let used := ci.type.getUsedConstants ++
-      ((ci.value? (allowOpaque := true)).map (·.getUsedConstants) |>.getD #[])
+    let used := Comparator.getUsedConstants ci.type ++
+      ((ci.value? (allowOpaque := true)).map Comparator.getUsedConstants |>.getD #[])
     if used.contains `sorryAx then
       reaches := reaches.insert n
       queue := queue.push n
@@ -188,7 +189,7 @@ def main (args : List String) : IO Unit := do
       let mut skip := false
       while !p.isAnonymous && !skip do
         if reported.contains p then
-          skip := !(ci matches .thmInfo _) || ci.type.getUsedConstants.any (p.isPrefixOf ·)
+          skip := !(ci matches .thmInfo _) || (Comparator.getUsedConstants ci.type).any (p.isPrefixOf ·)
         p := p.getPrefix
       if skip then
         continue
