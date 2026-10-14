@@ -1,5 +1,4 @@
 name = "Comparator"
-version = "0.1.1"
 defaultTargets = ["comparator", "query_decls"]
 
 [[lean_lib]]
@@ -7,6 +6,7 @@ name = "Comparator"
 
 [[lean_exe]]
 name = "comparator"
+supportInterpreter = true
 root = "Main"
 
 [[lean_exe]]
@@ -15,5 +15,10 @@ root = "scripts.QueryDecls"
 
 [[require]]
 scope = "leanprover"
+name = "Lean4Checker"
+rev = "66e11cea12f5ba215d76b15b7f8495141bf52c6c"
+
+[[require]]
+scope = "leanprover"
 name = "lean4export"
-rev = "v4.29.0"
+rev = "v4.28.0"
