@@ -233,7 +233,7 @@ def failKernel (name : Lean.Name) (ex : Lean.Kernel.Exception) : M Unit := do
   fail name (.kernel (← (ex.toMessageData {}).toString))
 
 def addDecl (name : Lean.Name) (d : Lean.Declaration) : M Unit := do
-  match (← get).env.addDeclCore 0 0 d none with
+  match (← get).env.addDeclCore 0 d none with
   | .ok env => modify ({ · with env })
   | .error ex => failKernel name ex
 
@@ -255,14 +255,14 @@ partial def replayConstant (name : Lean.Name) : M Unit := do
       | .defnInfo info => addDecl name (.defnDecl info)
       | .thmInfo info =>
         let snapEnv := (← get).env
-        match snapEnv.addDeclCore 0 0 (.axiomDecl ⟨info.toConstantVal, false⟩) none with
+        match snapEnv.addDeclCore 0 (.axiomDecl ⟨info.toConstantVal, false⟩) none with
         | .error ex => failKernel name ex
         | .ok _ =>
           match snapEnv.addDeclWithoutChecking (.thmDecl info) with
           | .error ex => failKernel name ex
           | .ok env =>
             let task := Task.spawn fun () =>
-              snapEnv.addDeclCore 0 0 (.thmDecl info) none |>.map fun _ => ()
+              snapEnv.addDeclCore 0 (.thmDecl info) none |>.map fun _ => ()
             modify fun s => { s with env, thmTasks := s.thmTasks.push (name, task) }
       | .axiomInfo info => addDecl name (.axiomDecl info)
       | .opaqueInfo info => addDecl name (.opaqueDecl info)
