@@ -9,7 +9,7 @@ structure Bundle (n : Nat) : Type where
 theorem lem (n : Nat) : n = n := rfl
 
 def T (n : Nat) : Bundle n :=
-  { a := ⟨n, by omega⟩
+  { a := ⟨n, Decidable.byContradiction (by as_aux_lemma => exact fun h => h (Eq.refl n))⟩
     b := ⟨(), fun h => id (h (Eq.refl n))⟩
     w := id (Wrap.mk _) }
 
