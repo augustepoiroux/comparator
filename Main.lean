@@ -610,7 +610,7 @@ def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.
   let typeFailureMode : CheckFailure := match mode with | .direct => .thmType | .disproof => .disproofType
 
   let fail ←
-    match Comparator.compareAt challenge solution #[t] defsToCompare #[] (mode == .disproof) (← get).compareChecked with
+    match Comparator.compareAt challenge solution #[t] defsToCompare #[] (mode == .disproof) (← get).compareChecked definitionNames with
     | .error e =>
       IO.println s!"Verification failed for {solutionName}: {e}"
       pure (some typeFailureMode)
@@ -661,7 +661,7 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) (
   let defsToCompare := (definitionNames.filter deps.contains).push d
 
   let fail ←
-    match Comparator.compareAt challenge solution #[] defsToCompare #[] (checked := (← get).compareChecked) with
+    match Comparator.compareAt challenge solution #[] defsToCompare #[] (checked := (← get).compareChecked) (allDefinitionTargets := definitionNames) with
     | .error e =>
       IO.println s!"Definition check failed for {d}: {e}"
       pure <| some .defnCheck
@@ -756,7 +756,7 @@ def verifyMatch (challenge solution : Export.ExportedEnv) (theoremNames : Array 
   let primTargets ← primitiveTargets
   let legalAxioms ← getLegalAxioms
   let quotTargets := if legalAxioms.contains ``Quot.sound then #[``Quot, ``Quot.mk, ``Quot.lift, ``Quot.ind] else #[]
-  let compareChecked ← IO.ofExcept <| Comparator.compareAt challenge solution legalAxioms #[] (primTargets ++ quotTargets)
+  let compareChecked ← IO.ofExcept <| Comparator.compareAt challenge solution legalAxioms #[] (primTargets ++ quotTargets) (allDefinitionTargets := definitionNames)
   modify ({ · with compareChecked })
 
   let mut outcomes : Array (Lean.Name × VerificationOutcome) := #[]
