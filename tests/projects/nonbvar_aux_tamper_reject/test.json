@@ -1,0 +1,35 @@
+{
+  "exit_code": 1,
+  "expected_output": [
+    "Solution disproof statement does not match accepted disproof interface: 'thm_tamper.disproof'"
+  ],
+  "expected_json_output": {
+    "accepted": false,
+    "error": "All verification targets failed:\n- thm_tamper: (some Comparator.CheckFailure.disproofType)\n",
+    "outcomes": [
+      [
+        "thm_tamper",
+        {
+          "failureMode": "disproofType",
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "thm_tamper.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": false
+        }
+      ]
+    ]
+  }
+}

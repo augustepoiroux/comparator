@@ -1,0 +1,6 @@
+{
+  "exit_code": 1,
+  "expected_output": [
+    "Challenge and solution theorem statement do not match: 'tgt'"
+  ]
+}

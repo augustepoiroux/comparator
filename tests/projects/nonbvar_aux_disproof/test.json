@@ -1,0 +1,68 @@
+{
+  "exit_code": 0,
+  "expected_output": [
+    "Running Lean default kernel on solution",
+    "Lean default kernel accepts the solution",
+    "Your solution is okay!"
+  ],
+  "expected_json_output": {
+    "accepted": true,
+    "error": null,
+    "outcomes": [
+      [
+        "thm_nonbvar_direct",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [
+              "Classical.choice",
+              "propext",
+              "Quot.sound"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "thm_nonbvar_direct",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "thm_nonbvar",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [
+              "Classical.choice",
+              "propext",
+              "Quot.sound"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "thm_nonbvar.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ]
+    ]
+  }
+}

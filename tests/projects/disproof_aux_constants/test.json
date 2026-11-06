@@ -1,0 +1,631 @@
+{
+  "exit_code": 0,
+  "expected_output": [
+    "Running Lean default kernel on solution",
+    "Lean default kernel accepts the solution",
+    "Your solution is okay!"
+  ],
+  "expected_json_output": {
+    "accepted": true,
+    "error": null,
+    "outcomes": [
+      [
+        "max_before_param",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "max_before_param.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "let_matcher",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [
+              "Quot.sound",
+              "propext"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "let_matcher.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "poly_unused",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "poly_unused.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "check_copy_paste",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "check_copy_paste.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "comm_max",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "comm_max.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "let_unfold_body",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "let_unfold_body.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "struct_ctor_matcher",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "struct_ctor_matcher",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "mutual_all_aux_disproof",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "mutual_all_aux_disproof.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "struct_and_opaque_aux_disproof",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "struct_and_opaque_aux_disproof.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "direct_proof_helper_matcher",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "direct_proof_helper_matcher",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "reused_sol_aux",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [
+              "Quot.sound",
+              "propext"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "reused_sol_aux.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx",
+              "propext",
+              "Quot.sound"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "omega_diff_hyps",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [
+              "Quot.sound",
+              "propext"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "omega_diff_hyps.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx",
+              "propext",
+              "Quot.sound"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "poly_dag_aux_disproof",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "poly_dag_aux_disproof.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "ulift_matcher_collapse",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [
+              "Quot.sound",
+              "propext"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "ulift_matcher_collapse.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "poly_imax_fn",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "poly_imax_fn.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "helper_cached_matcher",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [
+              "Quot.sound",
+              "propext"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "helper_cached_matcher.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "mixed_bvar_nonbvar",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [
+              "Quot.sound",
+              "propext"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "mixed_bvar_nonbvar",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx",
+              "propext",
+              "Quot.sound"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "have_vs_let_hole",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [
+              "Quot.sound",
+              "propext"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "have_vs_let_hole.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx",
+              "propext",
+              "Quot.sound"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "poly_matcher",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "poly_matcher.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "thm_priv",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [
+              "Quot.sound",
+              "propext"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "thm_priv.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "def_hole_let",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [
+              "Quot.sound",
+              "propext"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "def_hole_let.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx",
+              "propext",
+              "Quot.sound"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "poly_max_narrow",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "poly_max_narrow.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "nested_proof",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [
+              "Quot.sound",
+              "propext"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "nested_proof.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx",
+              "propext",
+              "Quot.sound"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "non_bvar_thm_aux",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "non_bvar_thm_aux",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "hole",
+        {
+          "failureMode": null,
+          "mode": null,
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "definition"
+            }
+          },
+          "solutionName": "hole",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "definition"
+            }
+          },
+          "verified": true
+        }
+      ]
+    ]
+  }
+}
