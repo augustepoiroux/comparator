@@ -59,18 +59,31 @@ def auxThmApp? (defTargets : Std.HashSet Name) (env : Export.ExportedEnv) (e : E
 
 abbrev Ctx := List (Expr × Option (Expr × Expr))
 abbrev PairKey := Bool × (Name × List Level) × (Name × List Level)
-abbrev ExprKey := Bool × Bool × Ctx × Expr × Expr
+abbrev ExprKey := Bool × Ctx × Expr × Expr
 
 structure MatchState where
   pairs : Std.HashMap PairKey Bool := {}
   seen : Std.HashSet ExprKey := {}
   levelPairs : Array (Level × Level) := #[]
   nonAux : Std.HashSet Name := {}
+  chalAux : Std.HashSet Name := {}
 
 abbrev MatchM := OptionT (StateM MatchState)
 
 @[inline] def addNonAux (sc : Bool) (n : Name) : MatchM Unit := do
   unless sc do modify fun s => { s with nonAux := s.nonAux.insert n }
+
+partial def collectChal (defTargets : Std.HashSet Name) (chal : Export.ExportedEnv) (e : Expr) : MatchM Unit := do
+  for n in e.getUsedConstants do
+    if !isAuxName defTargets n then addNonAux false n
+    else if !(← get).chalAux.contains n then
+      modify fun s => { s with chalAux := s.chalAux.insert n }
+      match chal.constMap[n]? with
+      | some (.thmInfo c) => collectChal defTargets chal c.type
+      | some (.defnInfo d) =>
+        if d.safety == .safe then collectChal defTargets chal d.type; collectChal defTargets chal d.value
+        else addNonAux false n
+      | _ => addNonAux false n
 
 @[inline] def checkLevels (sc freeLevels : Bool) (ls1 ls2 : List Level) : MatchM Unit := do
   guard (ls1.length == ls2.length)
@@ -100,8 +113,9 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
     (inApp : Bool := false) (sc : Bool := false) : MatchM Unit := do
   let (a1, a2) := (e1.consumeMData, e2.consumeMData)
   if let (.sort l1, .sort l2) := (a1, a2) then return ← checkLevels sc freeLevels [l1] [l2]
-  let cache := a1.approxDepth > 2 || a2.approxDepth > 2
-  if cache && (← get).seen.contains (sc, inApp, if a1.hasLooseBVars || a2.hasLooseBVars then ctx else [], a1, a2) then
+  let cache := !inApp && (a1.approxDepth > 6 || a2.approxDepth > 6)
+  let keyCtx := if !(a1.hasLooseBVars || a2.hasLooseBVars) || (defTargets.isEmpty && ctx.all (·.2.isNone)) then [] else ctx
+  if cache && (← get).seen.contains (sc, keyCtx, a1, a2) then
     return ()
   let letVal? (isSol : Bool) : Expr → Option Expr
     | .bvar i => ctx[i]?.bind (·.2.map fun (v1, v2) => (if isSol then v2 else v1).liftLooseBVars 0 (i + 1))
@@ -124,14 +138,15 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
       let mut curr1 := t1; let mut k1 := 0
       while k1 < args1.size do
         let .forallE _ dom body _ := curr1.consumeMData | break
-        let .bvar idx := args1[k1]!.consumeMData | break
-        let some (bty, _) := ctx[idx]? | break
-        if !defTargets.isEmpty then
-          let bvarType := bty.liftLooseBVars 0 (idx + 1)
-          let domInst := dom.instantiateRev (args1.extract 0 k1)
-          if bvarType != domInst then
-            if !(← runSpec true (matchExpr defTargets chal chal domInst bvarType false chalCtx false true)) then
-              break
+        if !defTargets.isEmpty || sc then
+          let .bvar idx := args1[k1]!.consumeMData | break
+          let some (bty, _) := ctx[idx]? | break
+          if !defTargets.isEmpty then
+            let bvarType := bty.liftLooseBVars 0 (idx + 1)
+            let domInst := dom.instantiateRev (args1.extract 0 k1)
+            if bvarType != domInst then
+              if !(← runSpec true (matchExpr defTargets chal chal domInst bvarType false chalCtx false true)) then
+                break
         curr1 := body; k1 := k1 + 1
       let r := args1.size - k1
       guard (args2.size >= r)
@@ -143,6 +158,7 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
         else if !freeLevels && r == 0 && args2.all (·.consumeMData.isBVar) && args1 == args2 then runSpec sc direct
         else pure false
       unless ok do
+        unless sc do collectChal defTargets chal t1; for a in args1[:k1] do collectChal defTargets chal a
         let mut curr2 := t2
         for _ in [:k2] do
           let .forallE _ _ body _ := curr2.consumeMData | failure
@@ -180,8 +196,7 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
       | .bvar .., .bvar .. | .fvar .., .fvar .. | .mvar .., .mvar .. | .lit .., .lit .. => guard (a1 == a2)
       | _, _ => failure
   if cache then
-    let keyCtx := if a1.hasLooseBVars || a2.hasLooseBVars then ctx else []
-    modify fun s => { s with seen := s.seen.insert (sc, inApp, keyCtx, a1, a2) }
+    modify fun s => { s with seen := s.seen.insert (sc, keyCtx, a1, a2) }
 
 def runMatch (defTargets : Std.HashSet Name) (chal sol : Export.ExportedEnv)
     (es : Array (Expr × Expr)) (freeLevels : Bool := false) : Option MatchState :=

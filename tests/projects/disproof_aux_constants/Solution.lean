@@ -125,3 +125,79 @@ private theorem _saux (_x : Type 2) : 0 < 1 := by decide
 theorem poly_unused.disproof
     (h : ∀ (_α : Type 0), (⟨0, _saux (Nat → Type 1)⟩ : Fin 1).val = 1) : False :=
   absurd (h Nat) (by decide)
+
+-- 14. User-named `private def` helper and lazy `let` unfolding in `.disproof`
+private def privStep (n : Nat) : Nat := n + 1
+
+theorem thm_priv.disproof (h : ∀ (n : Nat), privStep n = n + 2) : False := by
+  have := h 0
+  dsimp [privStep] at this
+  omega
+
+theorem let_unfold_body.disproof
+    (h : ∀ (n : Nat), let _m : Nat := n + 1; n + 1 = 0) : False :=
+  absurd (h 0) (by decide)
+
+-- 15. Mutual safe `.defnInfo` (`d.all != [d.name]`), `partial def` (`.opaqueInfo`), and depth-24 polymorphic DAG
+mutual
+  def dualAux.match_1 : Nat → Nat
+    | 0 => 0
+    | n + 1 => dualAux.match_2 n
+  def dualAux.match_2 : Nat → Nat
+    | 0 => 1
+    | n + 1 => dualAux.match_1 n
+end
+
+def useDualAux (n : Nat) : Nat := dualAux.match_1 n
+
+theorem mutual_all_aux_disproof.disproof
+    (h : ∀ (n : Nat), useDualAux n = 1) : False := by
+  have := h 0
+  contradiction
+
+private def cachePairProp (q : Nat × Nat) : Nat :=
+  let (a, b) := q
+  a + b
+
+structure PairSumZero where
+  p : Nat × Nat
+  ok : (let (a, b) := p; a + b) = 0
+
+partial def loopPair (q : Nat × Nat) : Nat :=
+  let (a, b) := q
+  if a == 0 then b else loopPair (a - 1, b + 1)
+
+theorem struct_and_opaque_aux_disproof.disproof
+    (h : ∀ (x : PairSumZero), x.p = (1, 0) ∧ loopPair x.p = 99) : False := by
+  have ⟨h0, _⟩ := h ⟨(0, 0), rfl⟩
+  injection h0 with h1 _
+  contradiction
+
+def _t0 (α : Type 0) (x : Nat) : Nat := x
+def _t1 (α : Type 0) (x : Nat) : Nat := _t0 α x + _t0 α x
+def _t2 (α : Type 0) (x : Nat) : Nat := _t1 α x + _t1 α x
+def _t3 (α : Type 0) (x : Nat) : Nat := _t2 α x + _t2 α x
+def _t4 (α : Type 0) (x : Nat) : Nat := _t3 α x + _t3 α x
+def _t5 (α : Type 0) (x : Nat) : Nat := _t4 α x + _t4 α x
+def _t6 (α : Type 0) (x : Nat) : Nat := _t5 α x + _t5 α x
+def _t7 (α : Type 0) (x : Nat) : Nat := _t6 α x + _t6 α x
+def _t8 (α : Type 0) (x : Nat) : Nat := _t7 α x + _t7 α x
+def _t9 (α : Type 0) (x : Nat) : Nat := _t8 α x + _t8 α x
+def _t10 (α : Type 0) (x : Nat) : Nat := _t9 α x + _t9 α x
+def _t11 (α : Type 0) (x : Nat) : Nat := _t10 α x + _t10 α x
+def _t12 (α : Type 0) (x : Nat) : Nat := _t11 α x + _t11 α x
+def _t13 (α : Type 0) (x : Nat) : Nat := _t12 α x + _t12 α x
+def _t14 (α : Type 0) (x : Nat) : Nat := _t13 α x + _t13 α x
+def _t15 (α : Type 0) (x : Nat) : Nat := _t14 α x + _t14 α x
+def _t16 (α : Type 0) (x : Nat) : Nat := _t15 α x + _t15 α x
+def _t17 (α : Type 0) (x : Nat) : Nat := _t16 α x + _t16 α x
+def _t18 (α : Type 0) (x : Nat) : Nat := _t17 α x + _t17 α x
+def _t19 (α : Type 0) (x : Nat) : Nat := _t18 α x + _t18 α x
+def _t20 (α : Type 0) (x : Nat) : Nat := _t19 α x + _t19 α x
+def _t21 (α : Type 0) (x : Nat) : Nat := _t20 α x + _t20 α x
+def _t22 (α : Type 0) (x : Nat) : Nat := _t21 α x + _t21 α x
+def _t23 (α : Type 0) (x : Nat) : Nat := _t22 α x + _t22 α x
+def _t24 (α : Type 0) (x : Nat) : Nat := _t23 α x + _t23 α x
+
+theorem poly_dag_aux_disproof.disproof (h : ∀ (α : Type 0), _t24 α 0 = 1) : False := by
+  cases h Nat
