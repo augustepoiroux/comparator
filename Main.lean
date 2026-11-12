@@ -152,7 +152,7 @@ def runExternalKernel (kernelName : String) (kernelCommand : Array String)
     configHandle.putStr <| Lean.Json.compress <| Lean.Json.mkObj [
       ("use_stdin", false),
       ("export_file_path", solutionPath.toString),
-      ("permitted_axioms", .arr <| legalAxioms.map (.str ∘ Lean.Name.toString)),
+      ("permitted_axioms", .arr <| legalAxioms.map (.str ∘ (·.toString (escape := false)))),
       ("unpermitted_axiom_hard_error", true),
       ("num_threads", 4),
       ("nat_extension", true),
@@ -172,10 +172,11 @@ def runExternalKernel (kernelName : String) (kernelCommand : Array String)
     let spawnArgs := {
       cmd := kernelCommand[0]!,
       args := kernelArgs,
-      envPass := #[]
+      envPass := #["LEAN_ABORT_ON_PANIC"]
+      envOverride := #[("LEAN_ABORT_ON_PANIC", some "1")]
       readablePaths := #[configPath.toString, solutionPath.toString]
       writablePaths := #[]
-      executablePaths := #[]
+      executablePaths := #[← getLeanPrefix]
     }
     let args := buildLandrunArgs spawnArgs
 
@@ -270,7 +271,8 @@ partial def replayConstant (name : Lean.Name) : M Unit := do
         for o in all do
           modify fun s => { s with remaining := s.remaining.erase o.name, pending := s.pending.erase o.name }
         let ctorInfo ← all.mapM fun ci => return (ci, ← ci.inductiveVal!.ctors.mapM fun n => return (← read)[n]!)
-        for (_, ctors) in ctorInfo do
+        for (ci, ctors) in ctorInfo do
+          for n in ci.getUsedConstantsAsSet do replayConstant n
           for ctor in ctors do
             for n in ctor.getUsedConstantsAsSet do replayConstant n
         addDecl name (.inductDecl info.levelParams info.numParams (ctorInfo.map fun ⟨ci, ctors⟩ =>
@@ -290,7 +292,7 @@ def replay (newConstants : Std.HashMap Lean.Name Lean.ConstantInfo) (env : Lean.
   let remaining := newConstants.fold (init := (∅ : Lean.NameSet)) fun acc n ci =>
     if !ci.isUnsafe && !ci.isPartial then acc.insert n else acc
   let (_, s) ← StateRefT'.run (s := { env, remaining }) <| ReaderT.run (r := newConstants) do
-    for n in #[``Nat, ``Char.ofNat, ``String.ofList] do replayConstant n
+    for n in #[``Nat, ``Char.ofNat, ``String.ofList, ``Quot] do replayConstant n
     for n in remaining do replayConstant n
     for (name, task) in (← get).thmTasks do
       if let .error ex := task.get then failKernel name ex
@@ -595,6 +597,7 @@ def getInfo (env : Export.ExportedEnv) (n : Lean.Name) : M (Option Info) := do
 structure VerifyState where
   compareChecked : Std.HashSet Lean.Name := {}
   axiomChecked : Std.HashSet Lean.Name := {}
+  defReach : Std.HashSet Lean.Name := {}
 
 abbrev VerifyM := StateRefT VerifyState M
 
@@ -603,20 +606,16 @@ def verifyOneTheoremAttempt (challenge solution : Export.ExportedEnv) (t : Lean.
     VerifyM VerificationOutcome := do
   let legalAxioms ← getLegalAxioms
   let sInfo := (← getInfo solution solutionName).get!
-  let defsToCompare := if definitionNames.isEmpty then #[] else
-    let (_, deps) := (collectDeps solution solutionName).run {}
-    definitionNames.filter deps.contains
-
   let typeFailureMode : CheckFailure := match mode with | .direct => .thmType | .disproof => .disproofType
 
   let fail ←
-    match Comparator.compareAt challenge solution #[t] defsToCompare #[] (mode == .disproof) (← get).compareChecked definitionNames with
+    match Comparator.compareAt challenge solution #[t] #[] #[] (mode == .disproof) (← get).compareChecked definitionNames (← get).defReach with
     | .error e =>
       IO.println s!"Verification failed for {solutionName}: {e}"
       pure (some typeFailureMode)
     | .ok compareChecked =>
       modify ({ · with compareChecked })
-      match Comparator.checkAxioms solution #[solutionName] defsToCompare legalAxioms (← get).axiomChecked with
+      match Comparator.checkAxioms solution #[solutionName] #[] legalAxioms (← get).axiomChecked with
       | .error e => IO.println s!"Axiom check failed for {solutionName}: {e}"; pure (some .axioms)
       | .ok axiomChecked =>
         modify ({ · with axiomChecked })
@@ -661,7 +660,7 @@ def verifyDefinition (challenge solution : Export.ExportedEnv) (d : Lean.Name) (
   let defsToCompare := (definitionNames.filter deps.contains).push d
 
   let fail ←
-    match Comparator.compareAt challenge solution #[] defsToCompare #[] (checked := (← get).compareChecked) (allDefinitionTargets := definitionNames) with
+    match Comparator.compareAt challenge solution #[] defsToCompare #[] (checked := (← get).compareChecked) (allDefinitionTargets := definitionNames) (defReach? := (← get).defReach) with
     | .error e =>
       IO.println s!"Definition check failed for {d}: {e}"
       pure <| some .defnCheck
@@ -722,6 +721,9 @@ closure is not validly in the replayed environment, with the kernel's message fo
 in export order (the target itself, or a dependency it may share with other targets). -/
 def kernelRejections (solution : Export.ExportedEnv) (failed : Std.HashMap Lean.Name Replay.Failure)
     (targets : Array Lean.Name) : M (Std.HashMap Lean.Name String) := do
+  if failed.isEmpty then
+    IO.println "Lean default kernel accepts the solution"
+    return {}
   let mut rejected := {}
   for t in targets do
     let (_, closure) := (collectDeps solution t).run {}
@@ -756,8 +758,10 @@ def verifyMatch (challenge solution : Export.ExportedEnv) (theoremNames : Array 
   let primTargets ← primitiveTargets
   let legalAxioms ← getLegalAxioms
   let quotTargets := if legalAxioms.contains ``Quot.sound then #[``Quot, ``Quot.mk, ``Quot.lift, ``Quot.ind] else #[]
-  let compareChecked ← IO.ofExcept <| Comparator.compareAt challenge solution legalAxioms #[] (primTargets ++ quotTargets) (allDefinitionTargets := definitionNames)
-  modify ({ · with compareChecked })
+  let keep (n : Lean.Name) := !challenge.constMap.contains n || solution.constMap.contains n
+  let defReach := Comparator.computeDefReach (Std.HashSet.ofArray definitionNames) challenge
+  let compareChecked ← IO.ofExcept <| Comparator.compareAt challenge solution (legalAxioms.filter keep) #[] (primTargets ++ quotTargets.filter keep) (allDefinitionTargets := definitionNames) (defReach? := defReach)
+  modify ({ · with compareChecked, defReach })
 
   let mut outcomes : Array (Lean.Name × VerificationOutcome) := #[]
   for t in theoremNames do

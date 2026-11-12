@@ -28,7 +28,7 @@ partial def matchLevel (rigid sm : Bool) (ps : List Name) (rsub : List (Name × 
     | some p => if !rigid && Level.geq p l2 then (n, l2) :: s.filter (·.1 != n) else s
   | _, .succ n1 => (predLevel? rigid l2).elim s (matchLevel rigid sm ps rsub n1 · s)
   | false, .imax n1 n2 =>
-    if !rsub.isEmpty && Level.isEquiv (inst (.succ .zero) n2) .zero then s
+    if !rsub.isEmpty && isEquivLevel (inst (.succ .zero) n2) .zero then s
     else if l2 == .zero || Level.geq (inst .zero n1) (.succ l2) then matchLevel false sm ps rsub n2 .zero s
     else if let (true, .imax m1 m2) := (sm, l2) then
       matchLevel false true ps rsub n2 m2 (matchLevel false true ps rsub n1 m1 s)
@@ -66,30 +66,29 @@ structure MatchState where
   seen : Std.HashSet ExprKey := {}
   levelPairs : Array (Level × Level) := #[]
   nonAux : Std.HashSet Name := {}
-  chalAux : Std.HashSet Name := {}
+  defReach : Std.HashSet Name := {}
 
 abbrev MatchM := OptionT (StateM MatchState)
 
 @[inline] def addNonAux (sc : Bool) (n : Name) : MatchM Unit := do
   unless sc do modify fun s => { s with nonAux := s.nonAux.insert n }
 
-partial def collectChal (defTargets : Std.HashSet Name) (chal : Export.ExportedEnv) (e : Expr) : MatchM Unit := do
-  for n in e.getUsedConstants do
-    if !isAuxName defTargets n then addNonAux false n
-    else if !(← get).chalAux.contains n then
-      modify fun s => { s with chalAux := s.chalAux.insert n }
-      match chal.constMap[n]? with
-      | some (.thmInfo c) => collectChal defTargets chal c.type
-      | some (.defnInfo d) =>
-        if d.safety == .safe then collectChal defTargets chal d.type; collectChal defTargets chal d.value
-        else addNonAux false n
-      | _ => addNonAux false n
-
 @[inline] def checkLevels (sc freeLevels : Bool) (ls1 ls2 : List Level) : MatchM Unit := do
   guard (ls1.length == ls2.length)
   for l1 in ls1, l2 in ls2 do
     if !sc && freeLevels && l1.hasParam then modify fun s => { s with levelPairs := s.levelPairs.push (l1, l2) }
-    else guard (Level.isEquiv l1 l2)
+    else guard (isEquivLevel l1 l2)
+
+def computeDefReach (defs : Std.HashSet Name) (chal : Export.ExportedEnv) : Std.HashSet Name :=
+  if defs.isEmpty then {} else Id.run do
+    let rev : Std.HashMap Name (Array Name) := (StateT.run (m := Id) (s := {}) <|
+      chal.constMap.forM fun u ci => runForUsedConsts ci fun v =>
+        unless u == v do modify fun m => m.alter v (some <| ·.getD #[] |>.push u)).2
+    let mut reach := defs; let mut q := defs.toArray
+    while !q.isEmpty do
+      let v := q.back!; q := q.pop
+      for u in rev.getD v #[] do unless reach.contains u do reach := reach.insert u; q := q.push u
+    reach
 
 def runSpec (subSc : Bool) (act : MatchM Unit) : MatchM Bool := do
   let s0 ← get
@@ -113,7 +112,7 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
     (inApp : Bool := false) (sc : Bool := false) : MatchM Unit := do
   let (a1, a2) := (e1.consumeMData, e2.consumeMData)
   if let (.sort l1, .sort l2) := (a1, a2) then return ← checkLevels sc freeLevels [l1] [l2]
-  let cache := !inApp && (a1.approxDepth > 6 || a2.approxDepth > 6)
+  let cache := !inApp && (a1.approxDepth > 0 || a2.approxDepth > 0)
   let keyCtx := if !(a1.hasLooseBVars || a2.hasLooseBVars) || (defTargets.isEmpty && ctx.all (·.2.isNone)) then [] else ctx
   if cache && (← get).seen.contains (sc, keyCtx, a1, a2) then
     return ()
@@ -130,8 +129,9 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
   else match if inApp then (none, none) else (auxThmApp? defTargets chal a1, auxThmApp? defTargets sol a2) with
     | (some (c1, ls1, args1), some (c2, ls2, args2)) =>
       -- Aux theorems are Prop-valued, so by proof irrelevance matching their result types suffices.
-      -- When definition holes exist, peeled bvars must also match their challenge binder domain so
-      -- a hole cannot make the context uninhabited while changing the peeled domain.
+      -- When definition holes exist, peel leading bvars whose challenge binder domain matches, then
+      -- any further prefix args when no hole is reachable from the aux theorem, live context, or arg.
+      let (ls1, ls2) := (ls1.map normLevel, ls2.map normLevel)
       let t1 := c1.type.instantiateLevelParams c1.levelParams ls1
       let t2 := c2.type.instantiateLevelParams c2.levelParams ls2
       let chalCtx := if sc || defTargets.isEmpty then ctx else ctx.map fun (t, v) => (t, v.map fun (x, _) => (x, x))
@@ -148,17 +148,26 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
               if !(← runSpec true (matchExpr defTargets chal chal domInst bvarType false chalCtx false true)) then
                 break
         curr1 := body; k1 := k1 + 1
+      if k1 < args1.size && !sc && !defTargets.isEmpty then
+        let reach := (← get).defReach
+        let ctxEs := (ctx.foldl (init := ((#[] : Array Expr), a1)) fun (es, e) (t, lv) =>
+          if !e.hasLooseBVar 0 then (es, e.lowerLooseBVars 1 1) else
+            (es.push t ++ lv.toArray.map (·.1), lv.elim (.lam `_ t e .default) fun (v, _) => .letE `_ t v e false)).1
+        unless reach.contains c1.name || ctxEs.any (·.getUsedConstants.any reach.contains) do
+          while k1 < args1.size do
+            let .forallE _ _ body _ := curr1.consumeMData | break
+            if args1[k1]!.getUsedConstants.any reach.contains then break
+            curr1 := body; k1 := k1 + 1
       let r := args1.size - k1
       guard (args2.size >= r)
       let k2 := args2.size - r
       for i in [:r] do matchExpr defTargets chal sol args1[k1 + i]! args2[k2 + i]! freeLevels ctx false sc
-      let direct := checkPair (sc, (c1.name, ls1.map Level.normalize), (c2.name, ls2.map Level.normalize))
+      let direct := checkPair (sc, (c1.name, ls1), (c2.name, ls2))
         (matchExpr defTargets chal sol t1 t2 freeLevels [] false sc)
       let ok ← if k1 == 0 && k2 == 0 then direct; pure true
         else if !freeLevels && r == 0 && args2.all (·.consumeMData.isBVar) && args1 == args2 then runSpec sc direct
         else pure false
       unless ok do
-        unless sc do collectChal defTargets chal t1; for a in args1[:k1] do collectChal defTargets chal a
         let mut curr2 := t2
         for _ in [:k2] do
           let .forallE _ _ body _ := curr2.consumeMData | failure
@@ -172,7 +181,7 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
         matchExpr defTargets chal sol x1 x2 freeLevels ctx false sc
       | .lam _ t1 b1 _, .lam _ t2 b2 _ | .forallE _ t1 b1 _, .forallE _ t2 b2 _ =>
         matchExpr defTargets chal sol t1 t2 freeLevels ctx false sc
-        matchExpr defTargets chal sol b1 b2 freeLevels ((t1, none) :: ctx) false sc
+        matchExpr defTargets chal sol b1 b2 freeLevels ((if defTargets.isEmpty || !b1.hasLooseBVar 0 then .bvar 0 else t1, none) :: ctx) false sc
       | .letE _ t1 v1 b1 _, .letE _ t2 v2 b2 _ =>
         matchExpr defTargets chal sol t1 t2 freeLevels ctx false sc
         matchExpr defTargets chal sol v1 v2 freeLevels ctx false sc
@@ -185,7 +194,8 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
           if d1.safety == .safe && d2.safety == .safe then
             guard (ls1.length == d1.levelParams.length && ls2.length == d2.levelParams.length &&
               !d1.type.hasLooseBVars && !d2.type.hasLooseBVars && !d1.value.hasLooseBVars && !d2.value.hasLooseBVars)
-            checkPair (sc, (n1, ls1.map Level.normalize), (n2, ls2.map Level.normalize)) do
+            let (ls1, ls2) := (ls1.map normLevel, ls2.map normLevel)
+            checkPair (sc, (n1, ls1), (n2, ls2)) do
               matchExpr defTargets chal sol (d1.type.instantiateLevelParams d1.levelParams ls1)
                 (d2.type.instantiateLevelParams d2.levelParams ls2) freeLevels [] false sc
               matchExpr defTargets chal sol (d1.value.instantiateLevelParams d1.levelParams ls1)
@@ -199,21 +209,21 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
     modify fun s => { s with seen := s.seen.insert (sc, keyCtx, a1, a2) }
 
 def runMatch (defTargets : Std.HashSet Name) (chal sol : Export.ExportedEnv)
-    (es : Array (Expr × Expr)) (freeLevels : Bool := false) : Option MatchState :=
-  let (r, s) := (es.forM fun (a, b) => matchExpr defTargets chal sol a b freeLevels).run {}
+    (es : Array (Expr × Expr)) (freeLevels : Bool := false) (defReach : Std.HashSet Name := {}) : Option MatchState :=
+  let (r, s) := (es.forM fun (a, b) => matchExpr defTargets chal sol a b freeLevels).run { defReach }
   r.map fun _ => s
 
 -- Pass 1 (`freeLevels = true`) heuristically proposes challenge universe instantiations;
 -- pass 2 (`freeLevels = false`) performs the authoritative structural check.
-def checkDisproof (defTargets : Std.HashSet Name) (chal sol : Export.ExportedEnv)
+def checkDisproof (defTargets defReach : Std.HashSet Name) (chal sol : Export.ExportedEnv)
     (chalType : Expr) (chalLevels : List Name) (solType : Expr) (solLevels : List Name) : Option (Array Name) := do
   let (outer, exp) ← match solType.consumeMData with
     | .forallE _ exp c _ => if c.consumeMData == .const ``False [] then some (``False, exp) else none
     | .app c exp => if c.consumeMData == .const ``Not [] then some (``Not, exp) else none
     | _ => none
   let chalType ← if chalLevels.isEmpty then pure chalType else do
-    let st ← runMatch defTargets chal sol #[(chalType, exp)] true
-    let npairs := st.levelPairs.map fun (l1, l2) => (l1.normalize, l2.normalize)
+    let st ← runMatch defTargets chal sol #[(chalType, exp)] true defReach
+    let npairs := st.levelPairs.map fun (l1, l2) => (normLevel l1, normLevel l2)
     let rigid := npairs.foldl (fun s (a, b) => matchLevel true false chalLevels [] a b s) []
     let solve (sm : Bool) :=
       let sub := npairs.foldl (fun s (a, b) => matchLevel false sm chalLevels rigid a b s) rigid
@@ -222,9 +232,9 @@ def checkDisproof (defTargets : Std.HashSet Name) (chal sol : Export.ExportedEnv
       (if chalLevels.all solLevels.contains then [chalLevels.map .param] else []) ++
       (if chalLevels.length == solLevels.length then [solLevels.map .param] else []) ++
       [solve false, solve true]
-    let ls ← cands.find? fun ls => npairs.all fun (l1, l2) => Level.isEquiv (l1.instantiateParams chalLevels ls) l2
+    let ls ← cands.find? fun ls => npairs.all fun (l1, l2) => isEquivLevel (l1.instantiateParams chalLevels ls) l2
     pure (chalType.instantiateLevelParams chalLevels ls)
-  return (← runMatch defTargets chal sol #[(chalType, exp)]).nonAux.insert outer |>.toArray
+  return (← runMatch defTargets chal sol #[(chalType, exp)] false defReach).nonAux.insert outer |>.toArray
 
 namespace Compare
 
@@ -232,6 +242,7 @@ structure Context where
   challenge : Export.ExportedEnv
   solution : Export.ExportedEnv
   definitionTargets : Std.HashSet Lean.Name
+  defReach : Std.HashSet Lean.Name
 
 structure State where
   worklist : Array Lean.Name
@@ -255,7 +266,7 @@ def stripConstExprs (isDefTarget : Bool) (ci : ConstantInfo) : ConstantInfo × A
   | .defnInfo v   => (.defnInfo { v with type := d, value := d, hints := .opaque, all := [] },
                       if isDefTarget then #[v.type] else #[v.type, v.value])
   | .thmInfo v    => (.thmInfo { v with type := d, value := d, all := [] }, #[v.type])
-  | .opaqueInfo v => (.opaqueInfo { v with type := d, value := d }, #[v.type, v.value])
+  | .opaqueInfo v => (.opaqueInfo { v with type := d, value := d, all := [] }, #[v.type, v.value])
   | .quotInfo v   => (.quotInfo { v with type := d }, #[v.type])
   | .inductInfo v => (.inductInfo { v with type := d }, #[v.type])
   | .ctorInfo v   => (.ctorInfo { v with type := d }, #[v.type])
@@ -263,7 +274,8 @@ def stripConstExprs (isDefTarget : Bool) (ci : ConstantInfo) : ConstantInfo × A
                       #[v.type] ++ v.rules.toArray.map (·.rhs))
 
 -- Fast path: identical expressions with no aux constants match structurally (`getUsedConstants` includes `.proj`).
-def matchConst (defTargets : Std.HashSet Name) (chal sol : Export.ExportedEnv)
+#guard ((Expr.proj ``Prod 0 (.bvar 0)).getUsedConstants).contains ``Prod
+def matchConst (defTargets defReach : Std.HashSet Name) (chal sol : Export.ExportedEnv)
     (isDefTarget : Bool) (c1 c2 : ConstantInfo) : Option (ConstantInfo × Array Name) := do
   let (m1, es1) := stripConstExprs isDefTarget c1
   let (m2, es2) := stripConstExprs isDefTarget c2
@@ -271,7 +283,7 @@ def matchConst (defTargets : Std.HashSet Name) (chal sol : Export.ExportedEnv)
   if es1 == es2 then
     let cs := es1.flatMap Expr.getUsedConstants
     if !cs.any (isAuxName defTargets) then return (m1, cs)
-  return (m1, (← runMatch defTargets chal sol (es1.zip es2)).nonAux.toArray)
+  return (m1, (← runMatch defTargets chal sol (es1.zip es2) false defReach).nonAux.toArray)
 
 partial def loop : CompareM Unit := do
   if (← get).worklist.isEmpty then
@@ -284,7 +296,7 @@ partial def loop : CompareM Unit := do
     | throw s!"Const not found in solution '{target}'"
 
   let ctx ← read
-  let some (ccMeta, nonAux) := matchConst ctx.definitionTargets ctx.challenge ctx.solution
+  let some (ccMeta, nonAux) := matchConst ctx.definitionTargets ctx.defReach ctx.challenge ctx.solution
       (ctx.definitionTargets.contains target) challengeConst solutionConst
     | throw s!"Const does not match between challenge and target '{target}'"
   nonAux.forM addWorklist
@@ -296,9 +308,11 @@ end Compare
 
 def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array Lean.Name)
     (definitionTargets : Array Lean.Name) (primitive : Array Lean.Name) (allowDisproofs : Bool := false)
-    (checked : Std.HashSet Lean.Name := {}) (allDefinitionTargets : Array Lean.Name := definitionTargets) :
+    (checked : Std.HashSet Lean.Name := {}) (allDefinitionTargets : Array Lean.Name := definitionTargets)
+    (defReach? : Option (Std.HashSet Lean.Name) := none) :
     Except String (Std.HashSet Lean.Name) := do
   let defTargetSet := Std.HashSet.ofArray (allDefinitionTargets ++ definitionTargets)
+  let defReach := defReach?.getD (computeDefReach defTargetSet challenge)
   let mut worklist := primitive
 
   for target in theoremTargets do
@@ -314,7 +328,7 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
       let .thmInfo sc := solutionConst
         | throw s!"Solution disproof target is not a theorem: '{dname}'"
 
-      let some nonAux := checkDisproof defTargetSet challenge solution cc.type cc.levelParams sc.type sc.levelParams
+      let some nonAux := checkDisproof defTargetSet defReach challenge solution cc.type cc.levelParams sc.type sc.levelParams
         | throw s!"Solution disproof statement does not match accepted disproof interface: '{dname}'"
 
       worklist := worklist ++ nonAux
@@ -324,7 +338,7 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
       unless (challengeConst, solutionConst) matches (.thmInfo _, .thmInfo _) | (.axiomInfo _, .axiomInfo _) do
         throw s!"Challenge and solution constant kind don't match: '{target}'"
 
-      let some (_, nonAux) := Compare.matchConst defTargetSet challenge solution false challengeConst solutionConst
+      let some (_, nonAux) := Compare.matchConst defTargetSet defReach challenge solution false challengeConst solutionConst
         | throw s!"Challenge and solution theorem statement do not match: '{target}'"
 
       worklist := worklist ++ nonAux
@@ -341,14 +355,14 @@ def compareAt (challenge solution : Export.ExportedEnv) (theoremTargets : Array 
     let .defnInfo solutionConst := solutionConst
       | throw s!"Solution constant is not a definition: '{target}'"
 
-    let some (_, nonAux) := Compare.matchConst defTargetSet challenge solution true
+    let some (_, nonAux) := Compare.matchConst defTargetSet defReach challenge solution true
         (.defnInfo challengeConst) (.defnInfo solutionConst)
       | throw s!"Const does not match between challenge and target '{target}'"
 
     worklist := (worklist.push solutionConst.name) ++ nonAux
 
   let (_, s) ← (do worklist.forM Compare.addWorklist; Compare.loop).run
-    { challenge, solution, definitionTargets := defTargetSet } |>.run { worklist := #[], checked }
+    { challenge, solution, definitionTargets := defTargetSet, defReach } |>.run { worklist := #[], checked }
   return s.checked
 
 end Comparator

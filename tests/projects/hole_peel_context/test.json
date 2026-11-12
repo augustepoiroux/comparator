@@ -1,0 +1,19 @@
+{
+  "exit_code": 0,
+  "expected_output": [
+    "Verification failed for tgtA",
+    "Verification failed for tgtB",
+    "Verification failed for tgtC",
+    "Verification failed for tgtD",
+    "Verification failed for tgtF",
+    "Verification failed for tgtG",
+    "WARNING: Theorem 'tgtA' remained unsolved",
+    "WARNING: Theorem 'tgtB' remained unsolved",
+    "WARNING: Theorem 'tgtC' remained unsolved",
+    "WARNING: Theorem 'tgtD' remained unsolved",
+    "WARNING: Theorem 'tgtF' remained unsolved",
+    "WARNING: Theorem 'tgtG' remained unsolved",
+    "Lean default kernel accepts the solution",
+    "Your solution is okay!"
+  ]
+}

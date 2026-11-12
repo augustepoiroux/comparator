@@ -1,0 +1,38 @@
+{
+  "challenge_module": "Challenge",
+  "solution_module": "Solution",
+  "theorem_names": [
+    "base",
+    "ord_a",
+    "ord_b",
+    "unrelated",
+    "dead_binder",
+    "masked_middle",
+    "dead_let",
+    "abbrev_dom",
+    "abbrev_dom_nohole",
+    "tgtH",
+    "tgtA",
+    "tgtB",
+    "tgtC",
+    "tgtD",
+    "tgtF",
+    "tgtG"
+  ],
+  "definition_names": [
+    "hole",
+    "hH",
+    "TA",
+    "TB",
+    "hC",
+    "hD",
+    "hF",
+    "hG"
+  ],
+  "must_resolve_all_sorries": false,
+  "permitted_axioms": [
+    "propext",
+    "Quot.sound",
+    "Classical.choice"
+  ]
+}

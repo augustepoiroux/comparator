@@ -7,6 +7,12 @@ import Lean.Environment
 
 namespace Comparator
 
+partial def normLevel (l : Lean.Level) : Lean.Level :=
+  let l' := l.normalize; if l' == l then l else normLevel l'
+
+@[inline] def isEquivLevel (u v : Lean.Level) : Bool :=
+  u == v || normLevel u == normLevel v
+
 def runForUsedConsts [Monad m] (info : Lean.ConstantInfo) (f : Lean.Name → m Unit) : m Unit := do
   info.type.getUsedConstants.forM f
   f info.name

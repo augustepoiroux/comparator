@@ -183,7 +183,8 @@ def main (args : List String) : IO Unit := do
     let isThmOrDefn := ci matches .thmInfo _ | .defnInfo _
     if !isThmOrDefn || Lean.isPrivateName n || !reaches.contains n then
       continue
-    if n.isInternalDetail then
+    let isReservedEqn := n matches .str _ "eq_def" | .str _ "eq_unfold" | .str _ "induct_unfolding" | .str _ "fun_cases_unfolding"
+    if n.isInternalDetail || isReservedEqn then
       let mut p := n.getPrefix
       let mut skip := false
       while !p.isAnonymous && !skip do

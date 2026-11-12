@@ -1,0 +1,107 @@
+{
+  "exit_code": 0,
+  "expected_output": [
+    "Verification failed for lvl_invalid",
+    "Running Lean default kernel on solution",
+    "Lean default kernel accepts the solution",
+    "Your solution is okay!"
+  ],
+  "expected_json_output": {
+    "accepted": true,
+    "error": null,
+    "outcomes": [
+      [
+        "lvl_order_ab",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "lvl_order_ab",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "lvl_order_ba",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "lvl_order_ba",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "lvl_valid",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "lvl_valid",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "lvl_invalid",
+        {
+          "failureMode": "thmType",
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "lvl_invalid",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": false
+        }
+      ]
+    ]
+  }
+}

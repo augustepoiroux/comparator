@@ -1,0 +1,129 @@
+{
+  "exit_code": 0,
+  "expected_output": [
+    "Running Lean default kernel on solution",
+    "Lean default kernel accepts the solution",
+    "Your solution is okay!"
+  ],
+  "expected_json_output": {
+    "accepted": true,
+    "error": null,
+    "outcomes": [
+      [
+        "tgt_direct",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "tgt_direct",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "tgt",
+        {
+          "failureMode": null,
+          "mode": "disproof",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "tgt.disproof",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "tgt_order_a",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "tgt_order_a",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "tgt_order_b",
+        {
+          "failureMode": null,
+          "mode": "direct",
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "solutionName": "tgt_order_b",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "theorem"
+            }
+          },
+          "verified": true
+        }
+      ],
+      [
+        "hole",
+        {
+          "failureMode": null,
+          "mode": null,
+          "solutionInfo": {
+            "axioms": [],
+            "constInfo": {
+              "kind": "definition"
+            }
+          },
+          "solutionName": "hole",
+          "targetInfo": {
+            "axioms": [
+              "sorryAx"
+            ],
+            "constInfo": {
+              "kind": "definition"
+            }
+          },
+          "verified": true
+        }
+      ]
+    ]
+  }
+}
