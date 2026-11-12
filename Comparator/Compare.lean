@@ -153,10 +153,10 @@ partial def matchExpr (defTargets : Std.HashSet Name) (chal sol : Export.Exporte
         let ctxEs := (ctx.foldl (init := ((#[] : Array Expr), a1)) fun (es, e) (t, lv) =>
           if !e.hasLooseBVar 0 then (es, e.lowerLooseBVars 1 1) else
             (es.push t ++ lv.toArray.map (·.1), lv.elim (.lam `_ t e .default) fun (v, _) => .letE `_ t v e false)).1
-        unless reach.contains c1.name || ctxEs.any (·.getUsedConstants.any reach.contains) do
+        unless reach.contains c1.name || ctxEs.any (fun e => (getUsedConstants e).any reach.contains) do
           while k1 < args1.size do
             let .forallE _ _ body _ := curr1.consumeMData | break
-            if args1[k1]!.getUsedConstants.any reach.contains then break
+            if (getUsedConstants args1[k1]!).any reach.contains then break
             curr1 := body; k1 := k1 + 1
       let r := args1.size - k1
       guard (args2.size >= r)
@@ -274,14 +274,14 @@ def stripConstExprs (isDefTarget : Bool) (ci : ConstantInfo) : ConstantInfo × A
                       #[v.type] ++ v.rules.toArray.map (·.rhs))
 
 -- Fast path: identical expressions with no aux constants match structurally (`getUsedConstants` includes `.proj`).
-#guard ((Expr.proj ``Prod 0 (.bvar 0)).getUsedConstants).contains ``Prod
+#guard (getUsedConstants (Expr.proj ``Prod 0 (.bvar 0))).contains ``Prod
 def matchConst (defTargets defReach : Std.HashSet Name) (chal sol : Export.ExportedEnv)
     (isDefTarget : Bool) (c1 c2 : ConstantInfo) : Option (ConstantInfo × Array Name) := do
   let (m1, es1) := stripConstExprs isDefTarget c1
   let (m2, es2) := stripConstExprs isDefTarget c2
   guard ((!isDefTarget || c1 matches .defnInfo _) && m1 == m2)
   if es1 == es2 then
-    let cs := es1.flatMap Expr.getUsedConstants
+    let cs := es1.flatMap getUsedConstants
     if !cs.any (isAuxName defTargets) then return (m1, cs)
   return (m1, (← runMatch defTargets chal sol (es1.zip es2) false defReach).nonAux.toArray)
 

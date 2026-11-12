@@ -242,13 +242,14 @@ partial def replayConstant (name : Lean.Name) : M Unit := do
   if (← get).remaining.contains name then
     modify fun s => { s with remaining := s.remaining.erase name, pending := s.pending.insert name }
     let some ci := (← read)[name]? | unreachable!
-    let deps := ci.getUsedConstantsAsSet
+    let deps : Array Lean.Name :=
+      (runForUsedConsts ci (fun n => modify (·.push n)) : StateM (Array Lean.Name) Unit).run #[] |>.2
     for n in deps do replayConstant n
     -- A synchronously rejected dependency is absent from `env`, so offering `name` to the kernel could
     -- only produce a misleading "unknown constant" error. Theorems rejected asynchronously are already
     -- in `env`; `runBuiltinKernel` attributes those through the dependency closure instead.
     let failed := (← get).failed
-    if let some d := deps.toList.find? failed.contains then
+    if let some d := deps.find? failed.contains then
       return ← fail name (.dependency d)
     if (← get).pending.contains name then
       match ci with
@@ -272,9 +273,9 @@ partial def replayConstant (name : Lean.Name) : M Unit := do
           modify fun s => { s with remaining := s.remaining.erase o.name, pending := s.pending.erase o.name }
         let ctorInfo ← all.mapM fun ci => return (ci, ← ci.inductiveVal!.ctors.mapM fun n => return (← read)[n]!)
         for (ci, ctors) in ctorInfo do
-          for n in ci.getUsedConstantsAsSet do replayConstant n
+          for n in getUsedConstants ci.type do replayConstant n
           for ctor in ctors do
-            for n in ctor.getUsedConstantsAsSet do replayConstant n
+            for n in getUsedConstants ctor.type do replayConstant n
         addDecl name (.inductDecl info.levelParams info.numParams (ctorInfo.map fun ⟨ci, ctors⟩ =>
           { name := ci.name, type := ci.type, ctors := ctors.map fun c => { name := c.name, type := c.type } }) false)
         -- The whole block stands or falls together.
